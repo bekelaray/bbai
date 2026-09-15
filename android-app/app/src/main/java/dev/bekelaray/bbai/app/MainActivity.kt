@@ -199,12 +199,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onOutputPicked(uri: Uri) {
+        val previousStored = prefs.getString(PREF_LAST_OUTPUT, null)?.let(Uri::parse)
         outputTreeUri = uri
         if (persistOutputUri(uri)) {
             prefs.edit().putString(PREF_LAST_OUTPUT, uri.toString()).apply()
             message = app.getString(R.string.message_output_saved)
         } else {
-            prefs.edit().remove(PREF_LAST_OUTPUT).apply()
+            outputTreeUri = previousStored
             message = app.getString(R.string.message_output_not_persisted)
         }
         persistedUris = loadPersistedUris()
@@ -537,7 +538,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         depth: Int,
         counter: ScanCounter,
     ): List<VirtualNode> {
-        if (depth > AppConfig.inputScanDepthLimit || counter.remaining <= 0) return emptyList()
+        if (depth > AppConfig.inputScanDepthLimit) {
+            counter.truncated = true
+            return emptyList()
+        }
+        if (counter.remaining <= 0) return emptyList()
         val children = directory.listFiles().sortedWith(compareBy<DocumentFile>({ !it.isDirectory }, { it.name.orEmpty().lowercase() }))
         return buildList {
             for (child in children) {
@@ -611,6 +616,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             app.contentResolver.openFileDescriptor(targetUri, "rw")?.use { descriptor ->
                 FileOutputStream(descriptor.fileDescriptor).use { output ->
                     output.channel.truncate(0L)
+                    output.channel.position(0L)
                     val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
                     val expectedSize = if (totalSize > 0) totalSize else reader.size
                     var copied = 0L
@@ -940,9 +946,12 @@ private fun HomeScreen(
 @Composable
 private fun BrowserScreen(viewModel: MainViewModel) {
     val session = viewModel.sessionStack.lastOrNull() ?: return
-    val visibleNodes = remember(session, viewModel.searchQuery, viewModel.sortMode, viewModel.expandedPaths) {
+    val sortedNodes = remember(session, viewModel.sortMode) {
+        sortNodes(session.inspection.entries, viewModel.sortMode)
+    }
+    val visibleNodes = remember(sortedNodes, viewModel.searchQuery, viewModel.expandedPaths) {
         flattenNodes(
-            nodes = filterAndSort(session.inspection.entries, viewModel.searchQuery, viewModel.sortMode),
+            nodes = filterNodes(sortedNodes, viewModel.searchQuery),
             expandedPaths = viewModel.expandedPaths,
         )
     }
@@ -1232,22 +1241,27 @@ private fun flattenNodes(nodes: List<VirtualNode>, expandedPaths: Set<String>, d
     }
 }
 
-private fun filterAndSort(nodes: List<VirtualNode>, query: String, sortMode: SortMode): List<VirtualNode> {
-    val filtered = nodes.mapNotNull { node ->
+private fun filterNodes(nodes: List<VirtualNode>, query: String): List<VirtualNode> {
+    return nodes.mapNotNull { node ->
         if (node.isDirectory) {
-            val children = filterAndSort(node.children, query, sortMode)
+            val children = filterNodes(node.children, query)
             val matchesSelf = query.isBlank() || node.path.contains(query, ignoreCase = true)
             if (children.isNotEmpty() || matchesSelf) node.copy(children = children) else null
         } else {
             if (query.isBlank() || node.path.contains(query, ignoreCase = true)) node else null
         }
     }
+}
+
+private fun sortNodes(nodes: List<VirtualNode>, sortMode: SortMode): List<VirtualNode> {
     val comparator = when (sortMode) {
         SortMode.NAME -> compareBy<VirtualNode> { !it.isDirectory }.thenBy { it.name.lowercase() }
         SortMode.SIZE -> compareBy<VirtualNode> { !it.isDirectory }.thenByDescending { it.size }.thenBy { it.name.lowercase() }
         SortMode.OFFSET -> compareBy<VirtualNode> { !it.isDirectory }.thenBy { it.offset }.thenBy { it.name.lowercase() }
     }
-    return filtered.sortedWith(comparator)
+    return nodes
+        .map { node -> if (node.isDirectory) node.copy(children = sortNodes(node.children, sortMode)) else node }
+        .sortedWith(comparator)
 }
 
 @Composable

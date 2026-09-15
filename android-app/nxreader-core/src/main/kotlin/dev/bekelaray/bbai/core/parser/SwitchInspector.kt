@@ -426,7 +426,7 @@ class SwitchInspector(
             lower.endsWith(".xci") || magicAt100 == "HEAD" -> DetectionResult(SwitchFileKind.XCI)
             lower.endsWith(".nca") -> DetectionResult(SwitchFileKind.NCA)
             lower.endsWith(".ncz") -> DetectionResult(SwitchFileKind.NCZ)
-            lower.endsWith(".romfs") && looksLikeRomFs(magic0) -> DetectionResult(SwitchFileKind.ROMFS)
+            looksLikeRomFs(magic0) -> DetectionResult(SwitchFileKind.ROMFS)
             lower.endsWith(".exefs") || looksLikeExeFs(magic0) -> DetectionResult(SwitchFileKind.EXEFS)
             lower.endsWith(".cnmt") || lower.contains(".cnmt.") -> DetectionResult(SwitchFileKind.CNMT)
             lower.endsWith(".nacp") -> DetectionResult(SwitchFileKind.NACP)
