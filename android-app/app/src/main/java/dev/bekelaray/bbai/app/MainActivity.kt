@@ -67,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -593,7 +594,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun copyFactoryToUri(factory: ReaderFactory, targetUri: Uri, totalSize: Long) {
         val reader = factory.openReader()
         try {
-            app.contentResolver.openOutputStream(targetUri, "w")?.use { output ->
+            app.contentResolver.openOutputStream(targetUri, "rwt")?.use { output ->
                 val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
                 var copied = 0L
                 var lastLoggedProgress = -1
@@ -999,7 +1000,12 @@ private fun PreviewScreen(viewModel: MainViewModel) {
     when (preview.detection.kind) {
         SwitchFileKind.IMAGE -> {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                AsyncImage(model = preview.uri, contentDescription = preview.title, modifier = Modifier.fillMaxWidth().padding(16.dp))
+                AsyncImage(
+                    model = preview.uri,
+                    contentDescription = preview.title,
+                    modifier = Modifier.fillMaxSize().padding(16.dp),
+                    contentScale = ContentScale.Fit,
+                )
             }
         }
         SwitchFileKind.AUDIO,
