@@ -332,8 +332,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 error = null,
                 logLines = listOf(logLine("Export started: ${node.path}")),
             )
+            var createdFile: DocumentFile? = null
             try {
                 val file = ensureOutputFile(targetTree, node.path, detection.mimeType)
+                createdFile = file
                 val factory = factoryForNode(current, node) ?: error(app.getString(R.string.message_unable_read_node))
                 copyFactoryToUri(factory, file.uri, node.size)
                 _exportState.value = _exportState.value.copy(
@@ -345,6 +347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } catch (cancelled: Exception) {
                 if (cancelled is kotlinx.coroutines.CancellationException) {
+                    runCatching { createdFile?.delete() }
                     _exportState.value = _exportState.value.copy(
                         running = false,
                         cancelled = true,
@@ -352,6 +355,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                     throw cancelled
                 } else {
+                    runCatching { createdFile?.delete() }
                     _exportState.value = _exportState.value.copy(
                         running = false,
                         error = cancelled.message ?: app.getString(R.string.message_unknown_error),
@@ -623,6 +627,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
+                if (copied != reader.size || (totalSize > 0 && copied != totalSize)) {
+                    error(app.getString(R.string.internal_incomplete_export))
+                }
             }
                 ?: error(app.getString(R.string.internal_unable_output_stream))
         } finally {
@@ -647,7 +654,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         current.findFile(filename)?.let { existing ->
             return when {
                 existing.isDirectory -> error(app.getString(R.string.internal_export_path_directory_collision, filename))
-                else -> existing
+                else -> error(app.getString(R.string.internal_export_path_file_collision, filename))
             }
         }
         return current.createFile(mimeType ?: "application/octet-stream", filename)

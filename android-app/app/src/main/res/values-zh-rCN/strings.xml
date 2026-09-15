@@ -36,6 +36,7 @@
     <string name="internal_failed_create_output">创建输出文件失败。</string>
     <string name="internal_unable_allocate_export_name">无法分配导出文件名。</string>
     <string name="internal_unable_open_fd">无法打开文件描述符。</string>
+    <string name="internal_incomplete_export">导出在复制完全部字节之前已结束。</string>
     <string name="home_intro_title">只读浏览合法拥有的 Switch 容器与特殊文件</string>
     <string name="home_intro_body">当前版本优先选择最稳、最快、最适合解包的方案：纯 Kotlin + SAF + 流式导出，不内置密钥、不联网、不执行内容。</string>
     <string name="button_pick_input_file">选择输入文件</string>

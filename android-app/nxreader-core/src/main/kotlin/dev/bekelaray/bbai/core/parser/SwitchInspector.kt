@@ -179,18 +179,24 @@ class SwitchInspector(
         if (header.size < RomFsHeaderSize) return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
 
         val headerSize = header.leLong(0)
+        val dirHashOffset = header.leLong(0x08)
+        val dirHashSize = header.leLong(0x10)
         val dirMetaOffset = header.leLong(0x18)
         val dirMetaSize = header.leLong(0x20)
+        val fileHashOffset = header.leLong(0x28)
+        val fileHashSize = header.leLong(0x30)
         val fileMetaOffset = header.leLong(0x38)
         val fileMetaSize = header.leLong(0x40)
         val dataOffset = header.leLong(0x48)
 
         val tables = listOf(
+            dirHashOffset to dirHashSize,
             dirMetaOffset to dirMetaSize,
+            fileHashOffset to fileHashSize,
             fileMetaOffset to fileMetaSize,
         )
         val invalidTable = tables.any { (offset, size) ->
-            offset < 0 || size <= 0 || size > MaxRomFsTableBytes || offset > reader.size || size > reader.size - offset
+            offset < 0 || size < 0 || size > MaxRomFsTableBytes || offset > reader.size || size > reader.size - offset
         }
         if (headerSize < RomFsHeaderSize || dataOffset < 0 || dataOffset > reader.size || invalidTable) {
             return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
@@ -202,7 +208,8 @@ class SwitchInspector(
             return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
         }
 
-        val rootEntry = parseRomFsDirectory(directoryTable, 0) ?: return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
+        val rootOffset = findRomFsRootDirectoryOffset(directoryTable)
+        val rootEntry = parseRomFsDirectory(directoryTable, rootOffset) ?: return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
         val rootChildren = buildList {
             addAll(readRomFsFiles(reader, fileTable, dataOffset, rootEntry.firstFileOffset, ""))
             addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, rootEntry.childOffset, ""))
@@ -216,8 +223,11 @@ class SwitchInspector(
             metadata = listOf(
                 MetadataField("Detected type", SwitchFileKind.ROMFS.name),
                 MetadataField("Header size", headerSize.toString()),
+                MetadataField("Directory hash table size", dirHashSize.toString()),
                 MetadataField("Directory table size", dirMetaSize.toString()),
+                MetadataField("File hash table size", fileHashSize.toString()),
                 MetadataField("File table size", fileMetaSize.toString()),
+                MetadataField("Root directory offset", "0x${rootOffset.toString(16)}"),
                 MetadataField("Data offset", "0x${dataOffset.toString(16)}"),
             ),
             entries = rootChildren.sortedBy { it.name.lowercase() },
@@ -603,6 +613,24 @@ class SwitchInspector(
             name = sanitizeNodeName(table.copyOfRange(nameStart, nameEnd).decodeToString()),
         )
     }
+
+    private fun findRomFsRootDirectoryOffset(directoryTable: ByteArray): Int {
+        if (directoryTable.size < 0x18) return 0
+        var offset = 0
+        while (offset + 0x18 <= directoryTable.size) {
+            val parent = directoryTable.leInt(offset)
+            val nameSize = directoryTable.leInt(offset + 0x14)
+            if (nameSize == 0 && (parent == RomFsEntryEmpty || parent == 0)) {
+                return offset
+            }
+            val nextOffset = align4(offset + 0x18 + nameSize)
+            if (nextOffset <= offset) break
+            offset = nextOffset
+        }
+        return 0
+    }
+
+    private fun align4(value: Int): Int = (value + 3) and 3.inv()
 
     private data class RomFsDirectoryEntry(
         val siblingOffset: Int,

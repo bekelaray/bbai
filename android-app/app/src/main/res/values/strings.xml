@@ -36,6 +36,7 @@
     <string name="internal_failed_create_output">Failed to create output file.</string>
     <string name="internal_unable_allocate_export_name">Unable to allocate an export filename.</string>
     <string name="internal_unable_open_fd">Unable to open file descriptor.</string>
+    <string name="internal_incomplete_export">Export ended before all bytes were copied.</string>
     <string name="home_intro_title">Read-only browsing for lawfully owned Switch containers and special files</string>
     <string name="home_intro_body">This build prioritizes the most stable and effective extraction-oriented approach: pure Kotlin, SAF, and streaming export, with no bundled keys, no networking, and no code execution.</string>
     <string name="button_pick_input_file">Pick input file</string>
