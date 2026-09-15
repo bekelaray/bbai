@@ -426,7 +426,7 @@ class SwitchInspector(
             lower.endsWith(".xci") || magicAt100 == "HEAD" -> DetectionResult(SwitchFileKind.XCI)
             lower.endsWith(".nca") -> DetectionResult(SwitchFileKind.NCA)
             lower.endsWith(".ncz") -> DetectionResult(SwitchFileKind.NCZ)
-            lower.endsWith(".romfs") -> DetectionResult(SwitchFileKind.ROMFS)
+            lower.endsWith(".romfs") && looksLikeRomFs(magic0) -> DetectionResult(SwitchFileKind.ROMFS)
             lower.endsWith(".exefs") || looksLikeExeFs(magic0) -> DetectionResult(SwitchFileKind.EXEFS)
             lower.endsWith(".cnmt") || lower.contains(".cnmt.") -> DetectionResult(SwitchFileKind.CNMT)
             lower.endsWith(".nacp") -> DetectionResult(SwitchFileKind.NACP)
@@ -456,6 +456,18 @@ class SwitchInspector(
     private fun isFlac(bytes: ByteArray) = bytes.size >= 4 && bytes.ascii(0, 4) == "fLaC"
     private fun isMp4(bytes: ByteArray, lower: String) = lower.endsWith(".mp4") || (bytes.size >= 12 && bytes.ascii(4, 4) == "ftyp")
     private fun isWebm(bytes: ByteArray, lower: String) = lower.endsWith(".webm") || (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(byteArrayOf(0x1A, 0x45, 0xDF.toByte(), 0xA3.toByte())))
+    private fun looksLikeRomFs(bytes: ByteArray): Boolean {
+        if (bytes.size < RomFsHeaderSize) return false
+        val headerSize = bytes.leLong(0)
+        val dirMetaOffset = bytes.leLong(0x18)
+        val fileMetaOffset = bytes.leLong(0x38)
+        val dataOffset = bytes.leLong(0x48)
+        return headerSize >= RomFsHeaderSize &&
+            headerSize <= 0x1000 &&
+            dirMetaOffset >= headerSize &&
+            fileMetaOffset >= dirMetaOffset &&
+            dataOffset >= fileMetaOffset
+    }
     private fun looksLikeExeFs(bytes: ByteArray): Boolean {
         if (bytes.size < 0xC0) return false
         var nonEmpty = 0

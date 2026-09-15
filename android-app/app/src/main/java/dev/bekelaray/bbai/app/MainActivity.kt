@@ -587,12 +587,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             FileOutputStream(target).use { output ->
                 val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
+                val expectedSize = reader.size
                 var position = 0L
-                while (position < reader.size) {
-                    val read = reader.readAt(position, buffer, 0, minOf(buffer.size.toLong(), reader.size - position).toInt())
+                while (position < expectedSize) {
+                    val read = reader.readAt(position, buffer, 0, minOf(buffer.size.toLong(), expectedSize - position).toInt())
                     if (read <= 0) break
                     output.write(buffer, 0, read)
                     position += read
+                }
+                if (position != expectedSize) {
+                    error(app.getString(R.string.internal_incomplete_export))
                 }
             }
             return target
@@ -608,15 +612,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 FileOutputStream(descriptor.fileDescriptor).use { output ->
                     output.channel.truncate(0L)
                     val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
+                    val expectedSize = if (totalSize > 0) totalSize else reader.size
                     var copied = 0L
                     var lastLoggedProgress = -1
-                    while (copied < reader.size) {
+                    while (copied < expectedSize) {
                         kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                        val read = reader.readAt(copied, buffer, 0, minOf(buffer.size.toLong(), reader.size - copied).toInt())
+                        val read = reader.readAt(copied, buffer, 0, minOf(buffer.size.toLong(), expectedSize - copied).toInt())
                         if (read <= 0) break
                         output.write(buffer, 0, read)
                         copied += read
-                        val progress = if (totalSize > 0) copied.toFloat() / totalSize.toFloat() else 0f
+                        val progress = if (expectedSize > 0) copied.toFloat() / expectedSize.toFloat() else 0f
                         _exportState.value = _exportState.value.copy(progress = progress, copiedBytes = copied)
                         val rounded = (progress * 100).roundToInt()
                         if (rounded % 10 == 0 && rounded != lastLoggedProgress) {
@@ -626,9 +631,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
                     }
-                }
-                if (copied != reader.size || (totalSize > 0 && copied != totalSize)) {
-                    error(app.getString(R.string.internal_incomplete_export))
+                    if (copied != expectedSize) {
+                        error(app.getString(R.string.internal_incomplete_export))
+                    }
                 }
             }
                 ?: error(app.getString(R.string.internal_unable_output_stream))
@@ -1242,9 +1247,7 @@ private fun filterAndSort(nodes: List<VirtualNode>, query: String, sortMode: Sor
         SortMode.SIZE -> compareBy<VirtualNode> { !it.isDirectory }.thenByDescending { it.size }.thenBy { it.name.lowercase() }
         SortMode.OFFSET -> compareBy<VirtualNode> { !it.isDirectory }.thenBy { it.offset }.thenBy { it.name.lowercase() }
     }
-    return filtered.sortedWith(comparator).map { node ->
-        if (node.isDirectory) node.copy(children = filterAndSort(node.children, query = "", sortMode = sortMode)) else node
-    }
+    return filtered.sortedWith(comparator)
 }
 
 @Composable
