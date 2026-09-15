@@ -178,7 +178,7 @@ class SwitchInspector(
             detection = DetectionResult(SwitchFileKind.CNMT),
             supportStatus = SupportStatus.SUPPORTED,
             metadata = listOf(
-                MetadataField("Title ID", header.hex(0, 8)),
+                MetadataField("Title ID", "%016X".format(header.leLong(0))),
                 MetadataField("Version", header.leInt(8).toUInt().toString()),
                 MetadataField("Meta type", header[0xC].toUByte().toString()),
                 MetadataField("Content count", header.leUShort(0x10).toString()),

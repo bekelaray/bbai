@@ -359,11 +359,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun releasePersistedUri(uri: Uri) {
         val permission = app.contentResolver.persistedUriPermissions.firstOrNull { it.uri == uri }
         val flags = buildPermissionFlags(permission?.isReadPermission == true, permission?.isWritePermission == true)
-        runCatching {
+        if (flags == 0) {
+            persistedUris = loadPersistedUris()
+            message = "No persisted permission exists for this URI."
+            return
+        }
+        val released = runCatching {
             app.contentResolver.releasePersistableUriPermission(
                 uri,
                 flags,
             )
+        }.isSuccess
+        if (!released) {
+            persistedUris = loadPersistedUris()
+            message = "Failed to release the persisted permission."
+            return
         }
         if (uri == lastInputUri) {
             lastInputUri = null
@@ -604,10 +614,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val parts = cleanPath.split('/')
         var current = tree
         parts.dropLast(1).forEach { folder ->
-            current = current.findFile(folder) ?: current.createDirectory(folder) ?: error("Failed to create $folder")
+            val existing = current.findFile(folder)
+            current = when {
+                existing == null -> current.createDirectory(folder) ?: error("Failed to create $folder")
+                existing.isDirectory -> existing
+                else -> error("Cannot export because $folder already exists as a file.")
+            }
         }
         val filename = parts.last()
-        current.findFile(filename)?.delete()
+        current.findFile(filename)?.let { existing ->
+            when {
+                existing.isDirectory -> error("Cannot export because $filename already exists as a directory.")
+                !existing.delete() -> error("Failed to replace existing file $filename.")
+            }
+        }
         return current.createFile(mimeType ?: "application/octet-stream", filename)
             ?: error("Failed to create output file.")
     }

@@ -73,11 +73,13 @@ fun ByteArray.leLong(offset: Int): Long {
 }
 
 fun ByteArray.ascii(offset: Int, length: Int): String {
-    val end = (offset until (offset + length))
+    if (offset !in indices || length <= 0) return ""
+    val upperBound = min(offset + length, size)
+    val end = (offset until upperBound)
         .firstOrNull { this[it] == 0.toByte() }
-        ?: (offset + length)
+        ?: upperBound
     return copyOfRange(offset, end).decodeToString().trim()
 }
 
 fun ByteArray.hex(offset: Int, length: Int): String =
-    copyOfRange(offset, offset + length).joinToString(separator = "") { "%02X".format(it) }
+    if (offset !in indices || length <= 0) "" else copyOfRange(offset, min(offset + length, size)).joinToString(separator = "") { "%02X".format(it) }
