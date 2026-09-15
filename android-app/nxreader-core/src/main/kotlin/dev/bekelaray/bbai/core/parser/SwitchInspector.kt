@@ -211,8 +211,8 @@ class SwitchInspector(
         val rootOffset = findRomFsRootDirectoryOffset(directoryTable)
         val rootEntry = parseRomFsDirectory(directoryTable, rootOffset) ?: return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
         val rootChildren = buildList {
-            addAll(readRomFsFiles(reader, fileTable, dataOffset, rootOffset, rootEntry.firstFileOffset, ""))
-            addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, rootOffset, rootEntry.childOffset, ""))
+            addAll(readRomFsFiles(reader, fileTable, dataOffset, 0, rootEntry.firstFileOffset, ""))
+            addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, 0, rootEntry.childOffset, ""))
         }
 
         return InspectionResult(
