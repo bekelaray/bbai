@@ -446,7 +446,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun copyFactoryToUri(factory: ReaderFactory, targetUri: Uri, totalSize: Long) {
         val reader = factory.openReader()
         try {
-            app.contentResolver.openOutputStream(targetUri, "wt")?.use { output ->
+            app.contentResolver.openOutputStream(targetUri, "w")?.use { output ->
                 val buffer = ByteArray(BUFFER_SIZE)
                 var copied = 0L
                 var lastLoggedProgress = -1
