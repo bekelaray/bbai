@@ -3,6 +3,7 @@ package dev.bekelaray.bbai.app
 import android.app.Application
 import android.net.Uri
 import android.os.Bundle
+import android.provider.DocumentsContract
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -194,18 +195,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onInputDirectoryPicked(uri: Uri) {
-        rememberInputIfPersisted(uri)
-        openInput(uri)
+        val treeUri = normalizeTreeUri(uri)
+        rememberInputIfPersisted(treeUri)
+        openInput(treeUri)
     }
 
     fun onOutputPicked(uri: Uri) {
-        val previousStored = prefs.getString(PREF_LAST_OUTPUT, null)?.let(Uri::parse)
-        outputTreeUri = uri
-        if (persistOutputUri(uri)) {
-            prefs.edit().putString(PREF_LAST_OUTPUT, uri.toString()).apply()
+        val treeUri = normalizeTreeUri(uri)
+        outputTreeUri = treeUri
+        if (persistOutputUri(treeUri)) {
+            prefs.edit().putString(PREF_LAST_OUTPUT, treeUri.toString()).apply()
             message = app.getString(R.string.message_output_saved)
         } else {
-            outputTreeUri = previousStored
             message = app.getString(R.string.message_output_not_persisted)
         }
         persistedUris = loadPersistedUris()
@@ -407,9 +408,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openInput(uri: Uri) {
-        val treeDocument = DocumentFile.fromTreeUri(app, uri)
+        val normalizedTreeUri = normalizeTreeUri(uri)
+        val treeDocument = DocumentFile.fromTreeUri(app, normalizedTreeUri)
         if (treeDocument?.isDirectory == true) {
-            openInputDirectory(uri, treeDocument)
+            openInputDirectory(normalizedTreeUri, treeDocument)
             return
         }
         val document = DocumentFile.fromSingleUri(app, uri)
@@ -699,6 +701,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 message = app.getString(R.string.message_input_not_persisted)
             }
         }
+    }
+
+    private fun normalizeTreeUri(uri: Uri): Uri {
+        if (!DocumentsContract.isTreeUri(uri)) return uri
+        val documentId = DocumentsContract.getTreeDocumentId(uri)
+        return DocumentsContract.buildDocumentUriUsingTree(uri, documentId)
     }
 
     private fun loadPersistedUris(): List<Uri> =
@@ -1242,13 +1250,14 @@ private fun flattenNodes(nodes: List<VirtualNode>, expandedPaths: Set<String>, d
 }
 
 private fun filterNodes(nodes: List<VirtualNode>, query: String): List<VirtualNode> {
+    if (query.isBlank()) return nodes
     return nodes.mapNotNull { node ->
         if (node.isDirectory) {
             val children = filterNodes(node.children, query)
-            val matchesSelf = query.isBlank() || node.path.contains(query, ignoreCase = true)
+            val matchesSelf = node.path.contains(query, ignoreCase = true)
             if (children.isNotEmpty() || matchesSelf) node.copy(children = children) else null
         } else {
-            if (query.isBlank() || node.path.contains(query, ignoreCase = true)) node else null
+            if (node.path.contains(query, ignoreCase = true)) node else null
         }
     }
 }
