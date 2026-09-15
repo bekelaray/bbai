@@ -1,0 +1,374 @@
+package dev.bekelaray.bbai.core.parser
+
+import dev.bekelaray.bbai.core.io.RandomAccessReader
+import dev.bekelaray.bbai.core.io.SliceReadSource
+import dev.bekelaray.bbai.core.io.ascii
+import dev.bekelaray.bbai.core.io.hex
+import dev.bekelaray.bbai.core.io.leInt
+import dev.bekelaray.bbai.core.io.leLong
+import dev.bekelaray.bbai.core.io.readExactAt
+import dev.bekelaray.bbai.core.model.DetectionResult
+import dev.bekelaray.bbai.core.model.InspectionResult
+import dev.bekelaray.bbai.core.model.MetadataField
+import dev.bekelaray.bbai.core.model.SupportStatus
+import dev.bekelaray.bbai.core.model.SwitchFileKind
+import dev.bekelaray.bbai.core.model.VirtualNode
+import kotlin.math.min
+
+class SwitchInspector {
+    suspend fun inspect(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val detection = detect(displayName, reader)
+        return when (detection.kind) {
+            SwitchFileKind.NSP,
+            SwitchFileKind.PFS0,
+            -> inspectPartitionFs(displayName, reader, baseOffset = 0L, isHfs0 = false)
+            SwitchFileKind.XCI -> inspectXci(displayName, reader)
+            SwitchFileKind.HFS0 -> inspectPartitionFs(displayName, reader, baseOffset = 0L, isHfs0 = true)
+            SwitchFileKind.CNMT -> inspectCnmt(displayName, reader)
+            SwitchFileKind.NACP -> inspectNacp(displayName, reader)
+            SwitchFileKind.NPDM -> inspectNpdm(displayName, reader)
+            SwitchFileKind.NRO -> inspectNro(displayName, reader)
+            SwitchFileKind.NSO -> inspectNso(displayName, reader)
+            SwitchFileKind.KIP -> inspectKip(displayName, reader)
+            SwitchFileKind.NCA,
+            SwitchFileKind.NCZ,
+            SwitchFileKind.ROMFS,
+            SwitchFileKind.EXEFS,
+            -> unsupported(displayName, reader.size, detection, "Encrypted or specialized content requires a future lawful parser boundary and is not decoded in this build.")
+            else -> InspectionResult(
+                displayName = displayName,
+                size = reader.size,
+                detection = detection,
+                supportStatus = if (detection.kind == SwitchFileKind.UNKNOWN) SupportStatus.UNSUPPORTED else SupportStatus.SUPPORTED,
+                metadata = listOf(
+                    MetadataField("Detected type", detection.kind.name),
+                    MetadataField("Size", reader.size.toString()),
+                ),
+                warnings = detection.notes,
+            )
+        }
+    }
+
+    private suspend fun inspectXci(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0x100, min(reader.size - 0x100, 0x200).toInt())
+        val rootOffset = 0x10000L
+        val rootMagic = if (reader.size >= rootOffset + 4) reader.readExactAt(rootOffset, 4).decodeToString() else ""
+        val metadata = buildList {
+            add(MetadataField("Detected type", "XCI"))
+            add(MetadataField("Header magic", if (header.size >= 4) header.ascii(0, 4) else ""))
+            add(MetadataField("Root partition offset", "0x${rootOffset.toString(16)}"))
+            add(MetadataField("Size", reader.size.toString()))
+        }
+        return if (rootMagic == "HFS0") {
+            val nested = inspectPartitionFs(displayName, SliceReadSource(reader, rootOffset, reader.size - rootOffset), rootOffset, isHfs0 = true)
+            nested.copy(
+                detection = DetectionResult(SwitchFileKind.XCI, notes = listOf("Root HFS0 discovered at 0x10000.")),
+                metadata = metadata + nested.metadata.drop(1),
+            )
+        } else {
+            InspectionResult(
+                displayName = displayName,
+                size = reader.size,
+                detection = DetectionResult(SwitchFileKind.XCI),
+                supportStatus = SupportStatus.UNSUPPORTED,
+                metadata = metadata,
+                warnings = listOf("No readable root HFS0 found at 0x10000."),
+            )
+        }
+    }
+
+    private suspend fun inspectPartitionFs(
+        displayName: String,
+        reader: RandomAccessReader,
+        baseOffset: Long,
+        isHfs0: Boolean,
+    ): InspectionResult {
+        val header = reader.readExactAt(0, 0x10)
+        val count = header.leInt(4)
+        val stringTableSize = header.leInt(8)
+        val entrySize = if (isHfs0) 0x40 else 0x18
+        val headerSize = 0x10L + count.toLong() * entrySize + stringTableSize.toLong()
+        val flatEntries = mutableListOf<FlatEntry>()
+        for (index in 0 until count) {
+            val entry = reader.readExactAt(0x10L + index.toLong() * entrySize, entrySize)
+            if (entry.size < entrySize) break
+            val offset = entry.leLong(0)
+            val size = entry.leLong(8)
+            val stringOffset = entry.leInt(16)
+            val nameBytes = readNullTerminated(reader, 0x10L + count.toLong() * entrySize + stringOffset, 0x200)
+            val name = sanitizeNodeName(nameBytes.decodeToString().ifBlank { "entry_$index" })
+            val path = sanitizeRelativePath(name)
+            flatEntries += FlatEntry(
+                name = path.substringAfterLast('/'),
+                path = path,
+                offset = baseOffset + headerSize + offset,
+                size = size,
+                detection = detect(path, SliceReadSource(reader, headerSize + offset, size)),
+            )
+        }
+        val kind = if (isHfs0) SwitchFileKind.HFS0 else if (displayName.lowercase().endsWith(".nsp")) SwitchFileKind.NSP else SwitchFileKind.PFS0
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(kind),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Detected type", kind.name),
+                MetadataField("Entry count", count.toString()),
+                MetadataField("String table size", stringTableSize.toString()),
+                MetadataField("Header size", headerSize.toString()),
+            ),
+            entries = buildTree(flatEntries),
+        )
+    }
+
+    private suspend fun inspectCnmt(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, 0x40).toInt())
+        if (header.size < 0x20) return invalid(displayName, reader.size, SwitchFileKind.CNMT)
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.CNMT),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Title ID", header.hex(0, 8)),
+                MetadataField("Version", header.leInt(8).toUInt().toString()),
+                MetadataField("Meta type", header[0xC].toUByte().toString()),
+                MetadataField("Content count", header.leInt(0x10).toString()),
+                MetadataField("Meta count", header.leInt(0x12).toString()),
+                MetadataField("Required system version", header.leInt(0x18).toUInt().toString()),
+            ),
+        )
+    }
+
+    private suspend fun inspectNacp(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, 0x3210).toInt())
+        if (header.size < 0x3070) return invalid(displayName, reader.size, SwitchFileKind.NACP)
+        val languageNames = listOf("American English", "British English", "Japanese", "French", "German", "Latin American Spanish", "Spanish", "Italian", "Dutch", "Canadian French", "Portuguese", "Russian", "Korean", "Traditional Chinese", "Simplified Chinese", "Brazilian Portuguese")
+        val firstFilled = languageNames.indices.firstOrNull { index ->
+            header.ascii(index * 0x300, 0x200).isNotBlank()
+        } ?: 0
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.NACP),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Preferred language slot", languageNames.getOrElse(firstFilled) { firstFilled.toString() }),
+                MetadataField("Title", header.ascii(firstFilled * 0x300, 0x200)),
+                MetadataField("Publisher", header.ascii(firstFilled * 0x300 + 0x200, 0x100)),
+                MetadataField("Display version", header.ascii(0x3060, 0x10)),
+                MetadataField("Application ID", header.hex(0x3200, 8)),
+            ),
+        )
+    }
+
+    private suspend fun inspectNpdm(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, 0x80).toInt())
+        if (header.size < 0x80) return invalid(displayName, reader.size, SwitchFileKind.NPDM)
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.NPDM),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Magic", header.ascii(0, 4)),
+                MetadataField("Version", header.leInt(0x18).toUInt().toString()),
+                MetadataField("Main thread priority", header[0xE].toUByte().toString()),
+                MetadataField("Main thread core", header[0xF].toUByte().toString()),
+                MetadataField("Process name", header.ascii(0x20, 0x10)),
+                MetadataField("Product code", header.ascii(0x30, 0x10)),
+                MetadataField("ACI offset", "0x${header.leInt(0x70).toUInt().toString(16)}"),
+                MetadataField("ACID offset", "0x${header.leInt(0x78).toUInt().toString(16)}"),
+            ),
+        )
+    }
+
+    private suspend fun inspectNro(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, 0xC0).toInt())
+        if (header.size < 0x40) return invalid(displayName, reader.size, SwitchFileKind.NRO)
+        val magicOffset = if (header.size >= 0x14 && header.ascii(0x10, 4) == "NRO0") 0x10 else 0
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.NRO),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Header magic", header.ascii(magicOffset, 4)),
+                MetadataField("MOD0 offset", if (header.size >= 8) "0x${header.leInt(4).toUInt().toString(16)}" else "unknown"),
+                MetadataField("Image size", if (header.size >= magicOffset + 12) header.leInt(magicOffset + 8).toUInt().toString() else "unknown"),
+                MetadataField("Build ID", if (header.size >= magicOffset + 0x60) header.hex(magicOffset + 0x40, 0x20) else "unavailable"),
+                MetadataField("Status", "Header recognized; asset block and embedded RomFS remain placeholder-only in this build."),
+            ),
+        )
+    }
+
+    private suspend fun inspectNso(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, 0x100).toInt())
+        if (header.size < 0x40) return invalid(displayName, reader.size, SwitchFileKind.NSO)
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.NSO),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Magic", header.ascii(0, 4)),
+                MetadataField("Flags", "0x${header.leInt(0xC).toUInt().toString(16)}"),
+                MetadataField("Text offset", "0x${header.leInt(0x10).toUInt().toString(16)}"),
+                MetadataField("Rodata offset", "0x${header.leInt(0x20).toUInt().toString(16)}"),
+                MetadataField("Data offset", "0x${header.leInt(0x30).toUInt().toString(16)}"),
+                MetadataField("Module ID", if (header.size >= 0x60) header.hex(0x40, 0x20) else "unavailable"),
+            ),
+        )
+    }
+
+    private suspend fun inspectKip(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, 0x40).toInt())
+        if (header.size < 0x10) return invalid(displayName, reader.size, SwitchFileKind.KIP)
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.KIP),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Magic", header.ascii(0, 4)),
+                MetadataField("Header bytes", header.hex(0, min(header.size, 0x20))),
+                MetadataField("Status", "KIP header identification is implemented; deeper segment decoding remains a placeholder."),
+            ),
+        )
+    }
+
+    private fun invalid(displayName: String, size: Long, kind: SwitchFileKind): InspectionResult = InspectionResult(
+        displayName = displayName,
+        size = size,
+        detection = DetectionResult(kind),
+        supportStatus = SupportStatus.INVALID,
+        metadata = listOf(MetadataField("Status", "File is too small or malformed for this parser.")),
+    )
+
+    private fun unsupported(displayName: String, size: Long, detection: DetectionResult, message: String): InspectionResult = InspectionResult(
+        displayName = displayName,
+        size = size,
+        detection = detection,
+        supportStatus = if (detection.kind == SwitchFileKind.NCA || detection.kind == SwitchFileKind.NCZ) SupportStatus.ENCRYPTED_OR_KEYS_REQUIRED else SupportStatus.UNSUPPORTED,
+        metadata = listOf(
+            MetadataField("Detected type", detection.kind.name),
+            MetadataField("Status", message),
+        ),
+    )
+
+    suspend fun detect(displayName: String, reader: RandomAccessReader): DetectionResult {
+        val lower = displayName.lowercase()
+        val magic0 = reader.readExactAt(0, min(reader.size, 0x110).toInt())
+        val magicAt0 = if (magic0.size >= 4) magic0.ascii(0, 4) else ""
+        val magicAt10 = if (magic0.size >= 0x14) magic0.ascii(0x10, 4) else ""
+        val magicAt100 = if (magic0.size >= 0x104) magic0.ascii(0x100, 4) else ""
+        return when {
+            magicAt0 == "PFS0" || lower.endsWith(".nsp") -> DetectionResult(SwitchFileKind.NSP)
+            magicAt0 == "HFS0" -> DetectionResult(SwitchFileKind.HFS0)
+            lower.endsWith(".xci") || magicAt100 == "HEAD" -> DetectionResult(SwitchFileKind.XCI)
+            lower.endsWith(".nca") -> DetectionResult(SwitchFileKind.NCA)
+            lower.endsWith(".ncz") -> DetectionResult(SwitchFileKind.NCZ)
+            lower.endsWith(".romfs") -> DetectionResult(SwitchFileKind.ROMFS)
+            lower.endsWith(".exefs") -> DetectionResult(SwitchFileKind.EXEFS)
+            lower.endsWith(".cnmt") || lower.contains(".cnmt.") -> DetectionResult(SwitchFileKind.CNMT)
+            lower.endsWith(".nacp") -> DetectionResult(SwitchFileKind.NACP)
+            lower.endsWith(".npdm") || magicAt0 == "META" -> DetectionResult(SwitchFileKind.NPDM)
+            lower.endsWith(".nro") || magicAt10 == "NRO0" -> DetectionResult(SwitchFileKind.NRO)
+            lower.endsWith(".nso") || magicAt0 == "NSO0" -> DetectionResult(SwitchFileKind.NSO)
+            lower.endsWith(".kip") || lower.endsWith(".kip1") || magicAt0 == "KIP1" -> DetectionResult(SwitchFileKind.KIP)
+            isPng(magic0) -> DetectionResult(SwitchFileKind.IMAGE, "image/png")
+            isJpeg(magic0) -> DetectionResult(SwitchFileKind.IMAGE, "image/jpeg")
+            isWebp(magic0) -> DetectionResult(SwitchFileKind.IMAGE, "image/webp")
+            isMp3(magic0, lower) -> DetectionResult(SwitchFileKind.AUDIO, "audio/mpeg")
+            isWav(magic0) -> DetectionResult(SwitchFileKind.AUDIO, "audio/wav")
+            isOgg(magic0) -> DetectionResult(SwitchFileKind.AUDIO, "audio/ogg")
+            isFlac(magic0) -> DetectionResult(SwitchFileKind.AUDIO, "audio/flac")
+            isMp4(magic0, lower) -> DetectionResult(SwitchFileKind.VIDEO, "video/mp4")
+            isWebm(magic0, lower) -> DetectionResult(SwitchFileKind.VIDEO, "video/webm")
+            else -> DetectionResult(SwitchFileKind.UNKNOWN)
+        }
+    }
+
+    private fun isPng(bytes: ByteArray) = bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+    private fun isJpeg(bytes: ByteArray) = bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte()
+    private fun isWebp(bytes: ByteArray) = bytes.size >= 12 && bytes.ascii(0, 4) == "RIFF" && bytes.ascii(8, 4) == "WEBP"
+    private fun isMp3(bytes: ByteArray, lower: String) = lower.endsWith(".mp3") || (bytes.size >= 3 && bytes.ascii(0, 3) == "ID3")
+    private fun isWav(bytes: ByteArray) = bytes.size >= 12 && bytes.ascii(0, 4) == "RIFF" && bytes.ascii(8, 4) == "WAVE"
+    private fun isOgg(bytes: ByteArray) = bytes.size >= 4 && bytes.ascii(0, 4) == "OggS"
+    private fun isFlac(bytes: ByteArray) = bytes.size >= 4 && bytes.ascii(0, 4) == "fLaC"
+    private fun isMp4(bytes: ByteArray, lower: String) = lower.endsWith(".mp4") || (bytes.size >= 12 && bytes.ascii(4, 4) == "ftyp")
+    private fun isWebm(bytes: ByteArray, lower: String) = lower.endsWith(".webm") || (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(byteArrayOf(0x1A, 0x45, 0xDF.toByte(), 0xA3.toByte())))
+
+    private suspend fun readNullTerminated(reader: RandomAccessReader, position: Long, maxLength: Int): ByteArray {
+        val raw = reader.readExactAt(position, maxLength)
+        val end = raw.indexOf(0).takeIf { it >= 0 } ?: raw.size
+        return raw.copyOf(end)
+    }
+
+    private fun buildTree(entries: List<FlatEntry>): List<VirtualNode> {
+        val root = mutableMapOf<String, MutableTreeNode>()
+        entries.forEach { entry ->
+            var current = root
+            val segments = entry.path.split('/').filter { it.isNotBlank() }
+            segments.forEachIndexed { index, segment ->
+                val isLeaf = index == segments.lastIndex
+                val node = current.getOrPut(segment) {
+                    MutableTreeNode(
+                        name = segment,
+                        path = segments.take(index + 1).joinToString("/"),
+                        isDirectory = !isLeaf,
+                        size = if (isLeaf) entry.size else 0L,
+                        offset = if (isLeaf) entry.offset else 0L,
+                        detection = if (isLeaf) entry.detection else DetectionResult(SwitchFileKind.UNKNOWN),
+                    )
+                }
+                if (isLeaf) {
+                    node.isDirectory = false
+                    node.size = entry.size
+                    node.offset = entry.offset
+                    node.detection = entry.detection
+                }
+                current = node.children
+            }
+        }
+        return root.values.map { it.toImmutable() }.sortedBy { it.name.lowercase() }
+    }
+
+    private fun sanitizeNodeName(value: String): String =
+        value.replace('\\', '/').trim().trimStart('/').ifBlank { "unnamed" }
+
+    private fun sanitizeRelativePath(value: String): String =
+        value.split('/')
+            .filter { it.isNotBlank() && it != "." && it != ".." }
+            .joinToString("/") { segment -> segment.replace(Regex("[^A-Za-z0-9._ -]"), "_") }
+            .ifBlank { "unnamed" }
+
+    private data class FlatEntry(
+        val name: String,
+        val path: String,
+        val offset: Long,
+        val size: Long,
+        val detection: DetectionResult,
+    )
+
+    private data class MutableTreeNode(
+        val name: String,
+        val path: String,
+        var isDirectory: Boolean,
+        var size: Long,
+        var offset: Long,
+        var detection: DetectionResult,
+        val children: MutableMap<String, MutableTreeNode> = linkedMapOf(),
+    ) {
+        fun toImmutable(): VirtualNode = VirtualNode(
+            name = name,
+            path = path,
+            isDirectory = isDirectory,
+            size = size,
+            offset = offset,
+            detection = detection,
+            children = children.values.map { it.toImmutable() }.sortedBy { it.name.lowercase() },
+        )
+    }
+}
