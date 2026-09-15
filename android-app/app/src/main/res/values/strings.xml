@@ -26,6 +26,8 @@
     <string name="message_browse_failed">Browse failed: %1$s</string>
     <string name="message_input_not_persisted">Input opened for this session, but persistent permission was not granted.</string>
     <string name="message_unknown_error">unknown error</string>
+    <string name="message_export_cancelled">Export cancelled.</string>
+    <string name="message_export_failed">Export failed: %1$s</string>
     <string name="internal_unable_output_stream">Unable to open output stream.</string>
     <string name="internal_output_dir_unavailable">Output directory is unavailable.</string>
     <string name="internal_failed_create_folder">Failed to create %1$s.</string>
@@ -52,6 +54,9 @@
     <string name="label_search_path">Search path</string>
     <string name="label_sort">Sort: %1$s</string>
     <string name="label_details">Details</string>
+    <string name="label_path">Path</string>
+    <string name="label_size">Size</string>
+    <string name="label_offset">Offset</string>
     <string name="button_browse_archive">Browse archive</string>
     <string name="button_media_preview">Media preview</string>
     <string name="button_export_raw">Export raw file</string>

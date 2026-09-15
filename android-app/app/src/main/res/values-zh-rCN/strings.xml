@@ -26,6 +26,8 @@
     <string name="message_browse_failed">浏览失败：%1$s</string>
     <string name="message_input_not_persisted">输入已在当前会话打开，但未获得持久权限。</string>
     <string name="message_unknown_error">未知错误</string>
+    <string name="message_export_cancelled">导出已取消。</string>
+    <string name="message_export_failed">导出失败：%1$s</string>
     <string name="internal_unable_output_stream">无法打开输出流。</string>
     <string name="internal_output_dir_unavailable">输出目录不可用。</string>
     <string name="internal_failed_create_folder">创建 %1$s 失败。</string>
@@ -52,6 +54,9 @@
     <string name="label_search_path">搜索路径</string>
     <string name="label_sort">排序：%1$s</string>
     <string name="label_details">详情</string>
+    <string name="label_path">路径</string>
+    <string name="label_size">大小</string>
+    <string name="label_offset">偏移</string>
     <string name="button_browse_archive">浏览容器</string>
     <string name="button_media_preview">媒体预览</string>
     <string name="button_export_raw">导出原始文件</string>

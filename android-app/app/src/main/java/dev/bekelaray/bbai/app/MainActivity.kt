@@ -99,6 +99,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -283,14 +284,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message = app.getString(R.string.message_unable_read_node)
             return
         }
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             isBusy = true
             try {
                 if (node.size > AppConfig.previewCacheLimitBytes) {
                     message = app.getString(R.string.message_preview_large)
                     return@launch
                 }
-                val cached = materializeToCache(sourceFactory, node.path)
+                val cached = withContext(Dispatchers.IO) {
+                    materializeToCache(sourceFactory, node.path)
+                }
                 previewState = PreviewState(node.name, detection, Uri.fromFile(cached), node.size)
                 currentScreen = Screen.Preview
             } catch (error: Exception) {
@@ -339,13 +342,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _exportState.value = _exportState.value.copy(
                         running = false,
                         cancelled = true,
-                        logLines = _exportState.value.logLines + logLine("Export cancelled."),
+                        logLines = _exportState.value.logLines + logLine(app.getString(R.string.message_export_cancelled)),
                     )
                 } else {
                     _exportState.value = _exportState.value.copy(
                         running = false,
-                        error = cancelled.message ?: "unknown error",
-                        logLines = _exportState.value.logLines + logLine("Export failed: ${cancelled.message}"),
+                        error = cancelled.message ?: app.getString(R.string.message_unknown_error),
+                        logLines = _exportState.value.logLines + logLine(
+                            app.getString(
+                                R.string.message_export_failed,
+                                cancelled.message ?: app.getString(R.string.message_unknown_error),
+                            ),
+                        ),
                     )
                 }
             }
@@ -400,10 +408,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openInputDirectory(uri: Uri, root: DocumentFile) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             isBusy = true
             try {
-                val inspection = inspectDirectory(root)
+                val inspection = withContext(Dispatchers.IO) { inspectDirectory(root) }
                 sessionStack = listOf(BrowserSession(root.name ?: "selected-directory", null, inspection))
                 expandedPaths = inspection.entries.map { it.path }.toSet()
                 selectedNode = null
@@ -421,10 +429,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun inspectAndReplace(factory: ReaderFactory) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             isBusy = true
             try {
-                val inspection = inspect(factory)
+                val inspection = withContext(Dispatchers.IO) { inspect(factory) }
                 sessionStack = listOf(BrowserSession(factory.displayName, factory, inspection))
                 expandedPaths = inspection.entries.map { it.path }.toSet()
                 selectedNode = null
@@ -442,10 +450,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun inspectAndPush(factory: ReaderFactory) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             isBusy = true
             try {
-                val inspection = inspect(factory)
+                val inspection = withContext(Dispatchers.IO) { inspect(factory) }
                 sessionStack = sessionStack + BrowserSession(factory.displayName, factory, inspection)
                 expandedPaths = expandedPaths + inspection.entries.map { it.path }
                 selectedNode = null
@@ -462,11 +470,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadDetail(node: VirtualNode) {
         val current = sessionStack.lastOrNull() ?: return
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             isBusy = true
             try {
-                val factory = factoryForNode(current, node) ?: error(app.getString(R.string.message_unable_read_node))
-                selectedInspection = inspect(factory)
+                val inspection = withContext(Dispatchers.IO) {
+                    val factory = factoryForNode(current, node) ?: error(app.getString(R.string.message_unable_read_node))
+                    inspect(factory)
+                }
+                selectedInspection = inspection
             } catch (error: Exception) {
                 selectedInspection = InspectionResult(
                     displayName = node.name,
@@ -629,10 +640,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         return current.createFile(mimeType ?: "application/octet-stream", filename)
-            ?: current.createFile(
-                mimeType ?: "application/octet-stream",
-                nextAvailableChildName(current, filename, app.getString(R.string.internal_unable_allocate_export_name)),
-            )
             ?: error(app.getString(R.string.internal_failed_create_output))
     }
 
@@ -659,7 +666,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             lastInputUri = null
             prefs.edit().remove(PREF_LAST_INPUT).apply()
-            message = app.getString(R.string.message_input_not_persisted)
+            if (message == null) {
+                message = app.getString(R.string.message_input_not_persisted)
+            }
         }
     }
 
@@ -692,24 +701,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 private fun buildPermissionFlags(read: Boolean, write: Boolean): Int =
     (if (read) android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
         (if (write) android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
-
-private fun nextAvailableChildName(parent: DocumentFile, requestedName: String, allocationError: String): String {
-    val dotIndex = requestedName.lastIndexOf('.')
-    val baseName = if (dotIndex > 0) requestedName.substring(0, dotIndex) else requestedName
-    val extension = if (dotIndex > 0) requestedName.substring(dotIndex) else ""
-    if (parent.findFile(requestedName) == null) return requestedName
-    generateSequence(1) { it + 1 }.forEach { index ->
-        val candidate = "$baseName ($index)$extension"
-        val existing = parent.findFile(candidate)
-        if (existing == null) {
-            return candidate
-        }
-        if (existing.isDirectory) {
-            throw IllegalStateException("Cannot export because $candidate already exists as a directory.")
-        }
-    }
-    error(allocationError)
-}
 
 private data class BrowserSession(
     val label: String,
@@ -978,9 +969,9 @@ private fun DetailScreen(viewModel: MainViewModel) {
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SummaryCard("路径", node.path)
-        SummaryCard("大小", node.size.toString())
-        SummaryCard("偏移", "0x${node.offset.toString(16)}")
+        SummaryCard(stringResource(R.string.label_path), node.path)
+        SummaryCard(stringResource(R.string.label_size), node.size.toString())
+        SummaryCard(stringResource(R.string.label_offset), "0x${node.offset.toString(16)}")
         inspection?.warnings?.forEach { WarningCard(it) }
         Card {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
