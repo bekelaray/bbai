@@ -37,6 +37,7 @@ docs/
 
 - Android 最低 API 26、目标 API 35 的 Compose 应用骨架
 - Storage Access Framework 文件/目录选择与持久化 URI 权限
+- 输入目录浏览：可直接选择 SAF 目录并浏览其中支持的子文件
 - 统一检测接口：扩展名 + magic bytes
 - 只读识别：NSP/PFS0、XCI/HFS0、NCA、NCZ、RomFS、ExeFS、CNMT、NACP、NPDM、NRO、NSO、KIP，以及常见图片/音频/视频
 - 真实目录读取：PFS0/NSP、HFS0，以及 XCI 根 HFS0
@@ -44,6 +45,7 @@ docs/
 - 媒体流程：PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM 预览；无法直接预览时支持导出回退
 - 原始文件导出：带进度、取消、错误提示和日志
 - 安全边界：相对路径净化、长整型偏移、流式复制、不联网、不执行导出文件
+- 合法密钥抽象边界：仅保留未来用户自行提供密钥时的接口，不在当前版本中启用解密
 
 ## 当前未实现
 
@@ -64,7 +66,7 @@ cd /home/runner/work/bbai/bbai/android-app
 
 ## 手工验证建议（由用户自行执行）
 
-- 使用 SAF 选择一个合法拥有的 `.nsp`、`.xci` 或特殊文件
+- 使用 SAF 选择一个合法拥有的 `.nsp`、`.xci`、特殊文件，或直接选择输入目录
 - 选择输出目录并确认 URI 权限可持久化
 - 浏览条目列表、搜索、排序、查看详情
 - 对 PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM 分别尝试预览

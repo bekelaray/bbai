@@ -15,7 +15,9 @@ import dev.bekelaray.bbai.core.model.SwitchFileKind
 import dev.bekelaray.bbai.core.model.VirtualNode
 import kotlin.math.min
 
-class SwitchInspector {
+class SwitchInspector(
+    private val keyProvider: LawfulKeyProvider? = null,
+) {
     suspend fun inspect(displayName: String, reader: RandomAccessReader): InspectionResult {
         val detection = detect(displayName, reader)
         return when (detection.kind) {
@@ -32,9 +34,10 @@ class SwitchInspector {
             SwitchFileKind.KIP -> inspectKip(displayName, reader)
             SwitchFileKind.NCA,
             SwitchFileKind.NCZ,
+            -> encryptedOrDeferred(displayName, reader.size, detection)
             SwitchFileKind.ROMFS,
             SwitchFileKind.EXEFS,
-            -> unsupported(displayName, reader.size, detection, "Encrypted or specialized content requires a future lawful parser boundary and is not decoded in this build.")
+            -> unsupported(displayName, reader.size, detection, "Specialized filesystem parsing remains deferred in this build.")
             else -> InspectionResult(
                 displayName = displayName,
                 size = reader.size,
@@ -250,11 +253,24 @@ class SwitchInspector {
         displayName = displayName,
         size = size,
         detection = detection,
-        supportStatus = if (detection.kind == SwitchFileKind.NCA || detection.kind == SwitchFileKind.NCZ) SupportStatus.ENCRYPTED_OR_KEYS_REQUIRED else SupportStatus.UNSUPPORTED,
+        supportStatus = SupportStatus.UNSUPPORTED,
         metadata = listOf(
             MetadataField("Detected type", detection.kind.name),
             MetadataField("Status", message),
         ),
+    )
+
+    private fun encryptedOrDeferred(displayName: String, size: Long, detection: DetectionResult): InspectionResult = InspectionResult(
+        displayName = displayName,
+        size = size,
+        detection = detection,
+        supportStatus = SupportStatus.ENCRYPTED_OR_KEYS_REQUIRED,
+        metadata = listOf(
+            MetadataField("Detected type", detection.kind.name),
+            MetadataField("Status", "Encrypted content is not decoded in this build."),
+            MetadataField("Lawful key provider", if (keyProvider == null) "Not configured" else "Configured but not yet used"),
+        ),
+        warnings = listOf("A future revision may query user-supplied lawful key material through an abstraction boundary without bundling keys."),
     )
 
     suspend fun detect(displayName: String, reader: RandomAccessReader): DetectionResult {

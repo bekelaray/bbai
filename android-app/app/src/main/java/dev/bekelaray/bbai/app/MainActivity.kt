@@ -3,7 +3,6 @@ package dev.bekelaray.bbai.app
 import android.app.Application
 import android.net.Uri
 import android.os.Bundle
-import android.provider.DocumentsContract
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -31,7 +30,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
@@ -39,12 +37,9 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -53,7 +48,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -65,7 +59,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -123,10 +116,18 @@ class MainActivity : ComponentActivity() {
                 val openFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     uri?.let { viewModel.onInputPicked(it) }
                 }
+                val openInputTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+                    uri?.let { viewModel.onInputDirectoryPicked(it) }
+                }
                 val openTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
                     uri?.let { viewModel.onOutputPicked(it) }
                 }
-                App(viewModel, onPickFile = { openFile.launch(arrayOf("*/*")) }, onPickTree = { openTree.launch(null) })
+                App(
+                    viewModel,
+                    onPickFile = { openFile.launch(arrayOf("*/*")) },
+                    onPickInputTree = { openInputTree.launch(null) },
+                    onPickTree = { openTree.launch(null) },
+                )
             }
         }
     }
@@ -137,6 +138,8 @@ private const val PREF_LAST_INPUT = "last_input"
 private const val PREF_LAST_OUTPUT = "last_output"
 private const val PREVIEW_CACHE_LIMIT = 128L * 1024L * 1024L
 private const val BUFFER_SIZE = 128 * 1024
+private const val INPUT_SCAN_LIMIT = 2_000
+private const val INPUT_SCAN_DEPTH_LIMIT = 12
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
@@ -178,7 +181,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistUri(uri)
         lastInputUri = uri
         prefs.edit().putString(PREF_LAST_INPUT, uri.toString()).apply()
-        openRoot(uri)
+        openInput(uri)
+    }
+
+    fun onInputDirectoryPicked(uri: Uri) {
+        persistUri(uri)
+        lastInputUri = uri
+        prefs.edit().putString(PREF_LAST_INPUT, uri.toString()).apply()
+        openInput(uri)
     }
 
     fun onOutputPicked(uri: Uri) {
@@ -190,7 +200,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun reopenLastInput() {
-        lastInputUri?.let(::openRoot) ?: run { message = "No remembered input file." }
+        lastInputUri?.let(::openInput) ?: run { message = "No remembered input file." }
     }
 
     fun navigate(screen: Screen) {
@@ -249,7 +259,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message = "This file is not a readable archive in the current build."
             return
         }
-        val factory = SliceReaderFactory(current.factory, node.offset, node.size, node.name)
+        val factory = factoryForNode(current, node) ?: run {
+            message = "Unable to open this node."
+            return
+        }
         inspectAndPush(factory)
     }
 
@@ -261,7 +274,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message = "Preview is only available for supported media files."
             return
         }
-        val sourceFactory = SliceReaderFactory(current.factory, node.offset, node.size, node.name)
+        val sourceFactory = factoryForNode(current, node) ?: run {
+            message = "Unable to read this node."
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             isBusy = true
             try {
@@ -300,7 +316,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             try {
                 val file = ensureOutputFile(targetTree, node.path, detection.mimeType)
-                val factory = SliceReaderFactory(current.factory, node.offset, node.size, node.name)
+                val factory = factoryForNode(current, node) ?: error("Unable to read this node.")
                 copyFactoryToUri(factory, file.uri, node.size)
                 _exportState.value = _exportState.value.copy(
                     running = false,
@@ -349,12 +365,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistedUris = loadPersistedUris()
     }
 
-    private fun openRoot(uri: Uri) {
+    private fun openInput(uri: Uri) {
+        val treeDocument = DocumentFile.fromTreeUri(app, uri)
+        if (treeDocument?.isDirectory == true) {
+            openInputDirectory(uri, treeDocument)
+            return
+        }
         val document = DocumentFile.fromSingleUri(app, uri)
         val name = document?.name ?: uri.lastPathSegment ?: "selected-file"
         val size = document?.length()?.takeIf { it >= 0 } ?: 0L
         val factory = UriReaderFactory(app, uri, name, size)
         inspectAndReplace(factory)
+    }
+
+    private fun openInputDirectory(uri: Uri, root: DocumentFile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            isBusy = true
+            try {
+                val inspection = inspectDirectory(root)
+                sessionStack = listOf(BrowserSession(root.name ?: "selected-directory", null, inspection))
+                expandedPaths = inspection.entries.map { it.path }.toSet()
+                selectedNode = null
+                selectedInspection = null
+                previewState = null
+                searchQuery = ""
+                sortMode = SortMode.NAME
+                currentScreen = Screen.Browser
+            } catch (error: Exception) {
+                message = "Open directory failed: ${error.message ?: "unknown error"}"
+            } finally {
+                isBusy = false
+            }
+        }
     }
 
     private fun inspectAndReplace(factory: ReaderFactory) {
@@ -364,6 +406,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val inspection = inspect(factory)
                 sessionStack = listOf(BrowserSession(factory.displayName, factory, inspection))
                 expandedPaths = inspection.entries.map { it.path }.toSet()
+                selectedNode = null
+                selectedInspection = null
+                previewState = null
                 searchQuery = ""
                 sortMode = SortMode.NAME
                 currentScreen = Screen.Browser
@@ -382,6 +427,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val inspection = inspect(factory)
                 sessionStack = sessionStack + BrowserSession(factory.displayName, factory, inspection)
                 expandedPaths = expandedPaths + inspection.entries.map { it.path }
+                selectedNode = null
+                selectedInspection = null
+                previewState = null
                 currentScreen = Screen.Browser
             } catch (error: Exception) {
                 message = "Browse failed: ${error.message ?: "unknown error"}"
@@ -396,7 +444,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             isBusy = true
             try {
-                val factory = SliceReaderFactory(current.factory, node.offset, node.size, node.name)
+                val factory = factoryForNode(current, node) ?: error("Unable to read this node.")
                 selectedInspection = inspect(factory)
             } catch (error: Exception) {
                 selectedInspection = InspectionResult(
@@ -419,6 +467,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } finally {
             reader.close()
         }
+    }
+
+    private suspend fun inspectDirectory(root: DocumentFile): InspectionResult {
+        val counter = ScanCounter(INPUT_SCAN_LIMIT)
+        val entries = scanDirectory(root, "", 0, counter)
+        return InspectionResult(
+            displayName = root.name ?: "selected-directory",
+            size = 0L,
+            detection = DetectionResult(SwitchFileKind.UNKNOWN),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Detected type", "DIRECTORY"),
+                MetadataField("Source URI", root.uri.toString()),
+                MetadataField("Scanned entries", (INPUT_SCAN_LIMIT - counter.remaining).toString()),
+                MetadataField("Scan limit", INPUT_SCAN_LIMIT.toString()),
+            ),
+            entries = entries,
+            warnings = if (counter.truncated) listOf("Directory scan stopped after $INPUT_SCAN_LIMIT nodes to avoid excessive memory use.") else emptyList(),
+        )
+    }
+
+    private suspend fun scanDirectory(
+        directory: DocumentFile,
+        relativePath: String,
+        depth: Int,
+        counter: ScanCounter,
+    ): List<VirtualNode> {
+        if (depth > INPUT_SCAN_DEPTH_LIMIT || counter.remaining <= 0) return emptyList()
+        val children = directory.listFiles().sortedWith(compareBy<DocumentFile>({ !it.isDirectory }, { it.name.orEmpty().lowercase() }))
+        return buildList {
+            for (child in children) {
+                if (counter.remaining <= 0) {
+                    counter.truncated = true
+                    break
+                }
+                counter.remaining -= 1
+                val safeName = sanitizeRelativePath(child.name ?: "unnamed").substringAfterLast('/')
+                val path = listOfNotNull(relativePath.takeIf { it.isNotBlank() }, safeName).joinToString("/")
+                if (child.isDirectory) {
+                    add(
+                        VirtualNode(
+                            name = safeName,
+                            path = path,
+                            isDirectory = true,
+                            size = 0L,
+                            offset = 0L,
+                            backingUri = child.uri.toString(),
+                            children = scanDirectory(child, path, depth + 1, counter),
+                        ),
+                    )
+                } else {
+                    val size = child.length().takeIf { it >= 0 } ?: 0L
+                    val detection = detectUriBackedFile(child, size)
+                    add(
+                        VirtualNode(
+                            name = safeName,
+                            path = path,
+                            isDirectory = false,
+                            size = size,
+                            offset = 0L,
+                            detection = detection,
+                            backingUri = child.uri.toString(),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun detectUriBackedFile(document: DocumentFile, size: Long): DetectionResult {
+        val name = document.name ?: "selected-file"
+        return runCatching {
+            UriReaderFactory(app, document.uri, name, size).openReader().use { reader ->
+                inspector.detect(name, reader)
+            }
+        }.getOrElse { DetectionResult(SwitchFileKind.UNKNOWN, notes = listOf("Detection failed: ${it.message ?: "unknown error"}")) }
     }
 
     private suspend fun materializeToCache(factory: ReaderFactory, relativePath: String): File {
@@ -504,6 +628,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun logLine(message: String): String = "${Instant.now()}  $message"
 
+    private fun factoryForNode(session: BrowserSession, node: VirtualNode): ReaderFactory? {
+        node.backingUri?.let {
+            return UriReaderFactory(app, Uri.parse(it), node.name, node.size)
+        }
+        val factory = session.factory ?: return null
+        return SliceReaderFactory(factory, node.offset, node.size, node.name)
+    }
+
     companion object {
         private const val IntentFlags =
             android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -512,8 +644,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 private data class BrowserSession(
     val label: String,
-    val factory: ReaderFactory,
+    val factory: ReaderFactory?,
     val inspection: InspectionResult,
+)
+
+private data class ScanCounter(
+    var remaining: Int,
+    var truncated: Boolean = false,
 )
 
 private data class PreviewState(
@@ -590,7 +727,12 @@ private class AndroidUriReader(
 }
 
 @Composable
-private fun App(viewModel: MainViewModel, onPickFile: () -> Unit, onPickTree: () -> Unit) {
+private fun App(
+    viewModel: MainViewModel,
+    onPickFile: () -> Unit,
+    onPickInputTree: () -> Unit,
+    onPickTree: () -> Unit,
+) {
     val exportState by viewModel.exportState.collectAsStateWithLifecycle()
     val title = when (viewModel.currentScreen) {
         Screen.Home -> "BBAI Switch Reader"
@@ -598,10 +740,6 @@ private fun App(viewModel: MainViewModel, onPickFile: () -> Unit, onPickTree: ()
         Screen.Detail -> viewModel.selectedNode?.name ?: "Details"
         Screen.Preview -> viewModel.previewState?.title ?: "Preview"
         Screen.Settings -> "Settings"
-    }
-
-    LaunchedEffect(viewModel.message) {
-        // State is rendered inline; nothing else required.
     }
 
     Scaffold(
@@ -620,7 +758,7 @@ private fun App(viewModel: MainViewModel, onPickFile: () -> Unit, onPickTree: ()
                 StatusBanner(viewModel.message, onDismiss = viewModel::clearMessage)
                 ExportStatusCard(exportState, onCancel = viewModel::cancelExport)
                 when (viewModel.currentScreen) {
-                    Screen.Home -> HomeScreen(viewModel, onPickFile, onPickTree)
+                    Screen.Home -> HomeScreen(viewModel, onPickFile, onPickInputTree, onPickTree)
                     Screen.Browser -> BrowserScreen(viewModel)
                     Screen.Detail -> DetailScreen(viewModel)
                     Screen.Preview -> PreviewScreen(viewModel)
@@ -669,7 +807,12 @@ private fun TopBar(
 }
 
 @Composable
-private fun HomeScreen(viewModel: MainViewModel, onPickFile: () -> Unit, onPickTree: () -> Unit) {
+private fun HomeScreen(
+    viewModel: MainViewModel,
+    onPickFile: () -> Unit,
+    onPickInputTree: () -> Unit,
+    onPickTree: () -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -681,6 +824,7 @@ private fun HomeScreen(viewModel: MainViewModel, onPickFile: () -> Unit, onPickT
                     Text("只读浏览合法拥有的 Switch 容器与特殊文件", style = MaterialTheme.typography.titleMedium)
                     Text("当前版本优先选择最稳、最快、最适合解包的方案：纯 Kotlin + SAF + 流式导出，不内置密钥、不联网、不执行内容。")
                     Button(onClick = onPickFile) { Text("选择输入文件") }
+                    OutlinedButton(onClick = onPickInputTree) { Text("选择输入目录") }
                     OutlinedButton(onClick = onPickTree) { Text("选择输出目录") }
                     OutlinedButton(onClick = viewModel::reopenLastInput, enabled = viewModel.lastInputUri != null) { Text("重新打开上次文件") }
                 }
@@ -697,6 +841,7 @@ private fun HomeScreen(viewModel: MainViewModel, onPickFile: () -> Unit, onPickT
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("支持范围")
                     Text("• 真实目录读取：PFS0/NSP、HFS0/XCI 根分区")
+                    Text("• SAF 输入目录浏览：本地目录及其支持的子文件")
                     Text("• 基础元数据：CNMT、NACP、NPDM、NRO、NSO、KIP")
                     Text("• 媒体预览：PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM（可预览时预览，否则导出回退）")
                     Text("• NCA/NCZ、RomFS、ExeFS 目前仅识别和显示不支持/需合法密钥状态")

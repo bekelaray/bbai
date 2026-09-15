@@ -47,6 +47,7 @@ data class VirtualNode(
     val offset: Long,
     val detection: DetectionResult = DetectionResult(SwitchFileKind.UNKNOWN),
     val exportable: Boolean = true,
+    val backingUri: String? = null,
     val children: List<VirtualNode> = emptyList(),
 )
 

@@ -12,7 +12,7 @@ The implementation is intentionally limited to lawful identification, browsing, 
 android-app/
 ├── app/
 │   ├── MainActivity + Compose UI screens
-│   ├── SAF integration and persisted URI permissions
+│   ├── SAF integration, input-directory browsing, and persisted URI permissions
 │   ├── export progress / cancellation / logging state
 │   └── media preview orchestration
 └── nxreader-core/
@@ -20,7 +20,8 @@ android-app/
     ├── file-kind detection
     ├── PFS0 / HFS0 parsing
     ├── CNMT / NACP / NPDM basic metadata parsing
-    └── NRO / NSO / KIP header recognition placeholders
+    ├── NRO / NSO / KIP header recognition placeholders
+    └── lawful key-provider abstraction boundary
 ```
 
 ## Independent rewrite strategy
@@ -31,12 +32,14 @@ The first implementation pass favors the most stable and maintainable approach o
 
 - pure Kotlin/JVM parsing core
 - Android Storage Access Framework instead of direct filesystem paths
+- direct SAF directory browsing for mixed container and media collections
 - streaming export and cache materialization instead of full-file memory loading
 - explicit unsupported / encrypted states instead of speculative parsing
 
 ## Supported behaviors in this revision
 
 - Detect container and media types from extension and magic bytes
+- Browse SAF-selected input directories without hard-coded storage paths
 - Read actual entry tables for clear-text PFS0/NSP and HFS0 containers
 - Inspect the root HFS0 inside XCI when discoverable
 - Display metadata, tree structure, offsets, sizes, and support status
@@ -46,7 +49,7 @@ The first implementation pass favors the most stable and maintainable approach o
 ## Deferred behaviors
 
 - RomFS / ExeFS filesystem walking
-- lawful key-provider abstraction wired into NCA parsing
+- lawful key-provider abstraction wired into future NCA parsing
 - Switch-specific texture/audio/video decoding
 - persistent background workers beyond in-process coroutines
 - format conformance verification against sample corpora
