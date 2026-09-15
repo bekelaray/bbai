@@ -40,7 +40,7 @@ docs/
 - 输入目录浏览：可直接选择 SAF 目录并浏览其中支持的子文件
 - 统一检测接口：扩展名 + magic bytes
 - 只读识别：NSP/PFS0、XCI/HFS0、NCA、NCZ、RomFS、ExeFS、CNMT、NACP、NPDM、NRO、NSO、KIP，以及常见图片/音频/视频
-- 真实目录读取：PFS0/NSP、HFS0、XCI 根 HFS0、ExeFS
+- 真实目录读取：PFS0/NSP、HFS0、XCI 根 HFS0、ExeFS、RomFS
 - 浏览功能：目录树、搜索、排序、详情页
 - 媒体流程：PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM 预览；无法直接预览时支持导出回退
 - 原始文件导出：带进度、取消、错误提示和日志
@@ -49,7 +49,6 @@ docs/
 
 ## 当前未实现
 
-- RomFS 的真实目录读取
 - NCA / NCZ 的合法密钥接入后受控解析
 - Switch 专有纹理、音频、视频编码的实际解码
 - 更持久的后台任务调度（例如 WorkManager 版本）
@@ -71,7 +70,8 @@ cd /home/runner/work/bbai/bbai/android-app
 - 浏览条目列表、搜索、排序、查看详情
 - 对 PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM 分别尝试预览
 - 导出一个原始文件并确认可取消、可查看日志
-- 对 `.nca`、`.ncz`、`.romfs` 确认显示为不支持或需合法密钥状态
+- 对 `.nca`、`.ncz` 确认显示为不支持或需合法密钥状态
+- 对 `.romfs` 确认可以列出目录和文件，并可继续查看其中可识别文件
 - 对 `.exefs` 确认可以列出条目，并可继续查看其中可识别文件
 
 ## 第三方依赖许可证清单模板

@@ -266,7 +266,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val node = selectedNode ?: return
         val current = sessionStack.lastOrNull() ?: return
         val detectionKind = selectedInspection?.detection?.kind ?: node.detection.kind
-        if (detectionKind !in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS)) {
+        if (detectionKind !in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS, SwitchFileKind.ROMFS)) {
             message = app.getString(R.string.message_not_readable_archive)
             return
         }
@@ -975,7 +975,7 @@ private fun DetailScreen(viewModel: MainViewModel) {
     val inspection = viewModel.selectedInspection
     val detection = inspection?.detection ?: node.detection
     val canPreview = detection.kind in setOf(SwitchFileKind.IMAGE, SwitchFileKind.AUDIO, SwitchFileKind.VIDEO)
-    val canBrowse = detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS)
+    val canBrowse = detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS, SwitchFileKind.ROMFS)
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1087,6 +1087,15 @@ private fun SettingsScreen(viewModel: MainViewModel) {
                     Text(stringResource(R.string.future_key_provider))
                     Text(stringResource(R.string.future_codecs))
                     Text(stringResource(R.string.future_workers))
+                }
+            }
+        }
+        item {
+            Card {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(stringResource(R.string.key_provider_title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.key_provider_status))
+                    Text(stringResource(R.string.key_provider_boundary))
                 }
             }
         }
@@ -1237,7 +1246,7 @@ private fun iconFor(node: VirtualNode) = when {
     node.detection.kind == SwitchFileKind.IMAGE -> Icons.Default.Description
     node.detection.kind == SwitchFileKind.AUDIO -> Icons.Default.MusicNote
     node.detection.kind == SwitchFileKind.VIDEO -> Icons.Default.Movie
-    node.detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS) -> Icons.Default.Folder
+    node.detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS, SwitchFileKind.ROMFS) -> Icons.Default.Folder
     node.detection.kind in setOf(SwitchFileKind.NCA, SwitchFileKind.NCZ) -> Icons.Default.Warning
     else -> Icons.Default.Description
 }

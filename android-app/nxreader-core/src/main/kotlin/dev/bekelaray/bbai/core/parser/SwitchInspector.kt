@@ -19,6 +19,12 @@ import kotlin.math.min
 class SwitchInspector(
     private val keyProvider: LawfulKeyProvider? = null,
 ) {
+    private companion object {
+        const val RomFsHeaderSize = 0x50
+        const val RomFsEntryEmpty = 0xFFFF_FFFF.toInt()
+        const val MaxRomFsTableBytes = 32L * 1024L * 1024L
+    }
+
     suspend fun inspect(displayName: String, reader: RandomAccessReader): InspectionResult {
         val detection = detect(displayName, reader)
         return when (detection.kind) {
@@ -28,6 +34,7 @@ class SwitchInspector(
             SwitchFileKind.XCI -> inspectXci(displayName, reader)
             SwitchFileKind.HFS0 -> inspectPartitionFs(displayName, reader, baseOffset = 0L, isHfs0 = true)
             SwitchFileKind.EXEFS -> inspectExeFs(displayName, reader)
+            SwitchFileKind.ROMFS -> inspectRomFs(displayName, reader)
             SwitchFileKind.CNMT -> inspectCnmt(displayName, reader)
             SwitchFileKind.NACP -> inspectNacp(displayName, reader)
             SwitchFileKind.NPDM -> inspectNpdm(displayName, reader)
@@ -37,8 +44,6 @@ class SwitchInspector(
             SwitchFileKind.NCA,
             SwitchFileKind.NCZ,
             -> encryptedOrDeferred(displayName, reader.size, detection)
-            SwitchFileKind.ROMFS,
-            -> unsupported(displayName, reader.size, detection, "Specialized filesystem parsing remains deferred in this build.")
             else -> InspectionResult(
                 displayName = displayName,
                 size = reader.size,
@@ -166,6 +171,56 @@ class SwitchInspector(
             ),
             entries = buildTree(entries),
             warnings = if (nonEmptyCount == 0) listOf("No readable ExeFS entries were found in the header.") else emptyList(),
+        )
+    }
+
+    private suspend fun inspectRomFs(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, RomFsHeaderSize.toLong()).toInt())
+        if (header.size < RomFsHeaderSize) return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
+
+        val headerSize = header.leLong(0)
+        val dirMetaOffset = header.leLong(0x18)
+        val dirMetaSize = header.leLong(0x20)
+        val fileMetaOffset = header.leLong(0x38)
+        val fileMetaSize = header.leLong(0x40)
+        val dataOffset = header.leLong(0x48)
+
+        val tables = listOf(
+            dirMetaOffset to dirMetaSize,
+            fileMetaOffset to fileMetaSize,
+        )
+        val invalidTable = tables.any { (offset, size) ->
+            offset < 0 || size <= 0 || size > MaxRomFsTableBytes || offset > reader.size || size > reader.size - offset
+        }
+        if (headerSize < RomFsHeaderSize || dataOffset < 0 || dataOffset > reader.size || invalidTable) {
+            return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
+        }
+
+        val directoryTable = reader.readExactAt(dirMetaOffset, dirMetaSize.toInt())
+        val fileTable = reader.readExactAt(fileMetaOffset, fileMetaSize.toInt())
+        if (directoryTable.size != dirMetaSize.toInt() || fileTable.size != fileMetaSize.toInt()) {
+            return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
+        }
+
+        val rootEntry = parseRomFsDirectory(directoryTable, 0) ?: return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
+        val rootChildren = buildList {
+            addAll(readRomFsFiles(reader, fileTable, dataOffset, rootEntry.firstFileOffset, ""))
+            addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, rootEntry.childOffset, ""))
+        }
+
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.ROMFS),
+            supportStatus = SupportStatus.SUPPORTED,
+            metadata = listOf(
+                MetadataField("Detected type", SwitchFileKind.ROMFS.name),
+                MetadataField("Header size", headerSize.toString()),
+                MetadataField("Directory table size", dirMetaSize.toString()),
+                MetadataField("File table size", fileMetaSize.toString()),
+                MetadataField("Data offset", "0x${dataOffset.toString(16)}"),
+            ),
+            entries = rootChildren.sortedBy { it.name.lowercase() },
         )
     }
 
@@ -460,6 +515,108 @@ class SwitchInspector(
         "main.npdm" -> name
         else -> name
     }
+
+    private suspend fun readRomFsDirectories(
+        reader: RandomAccessReader,
+        directoryTable: ByteArray,
+        fileTable: ByteArray,
+        dataOffset: Long,
+        firstOffset: Int,
+        parentPath: String,
+        visited: MutableSet<Int> = mutableSetOf(),
+    ): List<VirtualNode> {
+        val nodes = mutableListOf<VirtualNode>()
+        var offset = firstOffset
+        while (offset != RomFsEntryEmpty && visited.add(offset)) {
+            val entry = parseRomFsDirectory(directoryTable, offset) ?: break
+            val path = sanitizeRelativePath(listOf(parentPath, entry.name).filter { it.isNotBlank() }.joinToString("/"))
+            val children = buildList {
+                addAll(readRomFsFiles(reader, fileTable, dataOffset, entry.firstFileOffset, path))
+                addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, entry.childOffset, path))
+            }.sortedBy { it.name.lowercase() }
+            nodes += VirtualNode(
+                name = entry.name.ifBlank { "root" },
+                path = path,
+                isDirectory = true,
+                size = 0L,
+                offset = 0L,
+                detection = DetectionResult(SwitchFileKind.ROMFS),
+                children = children,
+            )
+            offset = entry.siblingOffset
+        }
+        return nodes
+    }
+
+    private suspend fun readRomFsFiles(
+        reader: RandomAccessReader,
+        fileTable: ByteArray,
+        dataOffset: Long,
+        firstOffset: Int,
+        parentPath: String,
+        visited: MutableSet<Int> = mutableSetOf(),
+    ): List<VirtualNode> {
+        val nodes = mutableListOf<VirtualNode>()
+        var offset = firstOffset
+        while (offset != RomFsEntryEmpty && visited.add(offset)) {
+            val entry = parseRomFsFile(fileTable, offset) ?: break
+            if (entry.dataOffset >= 0 && entry.size >= 0 && dataOffset + entry.dataOffset <= reader.size && entry.size <= reader.size - dataOffset - entry.dataOffset) {
+                val path = sanitizeRelativePath(listOf(parentPath, entry.name).filter { it.isNotBlank() }.joinToString("/"))
+                nodes += VirtualNode(
+                    name = entry.name,
+                    path = path,
+                    isDirectory = false,
+                    size = entry.size,
+                    offset = dataOffset + entry.dataOffset,
+                    detection = detect(path, SliceReadSource(reader, dataOffset + entry.dataOffset, entry.size)),
+                )
+            }
+            offset = entry.siblingOffset
+        }
+        return nodes
+    }
+
+    private fun parseRomFsDirectory(table: ByteArray, offset: Int): RomFsDirectoryEntry? {
+        if (offset < 0 || offset + 0x18 > table.size) return null
+        val nameSize = table.leInt(offset + 0x14)
+        val nameStart = offset + 0x18
+        val nameEnd = nameStart + nameSize
+        if (nameSize < 0 || nameEnd > table.size) return null
+        return RomFsDirectoryEntry(
+            siblingOffset = table.leInt(offset + 0x4),
+            childOffset = table.leInt(offset + 0x8),
+            firstFileOffset = table.leInt(offset + 0xC),
+            name = sanitizeNodeName(table.copyOfRange(nameStart, nameEnd).decodeToString()),
+        )
+    }
+
+    private fun parseRomFsFile(table: ByteArray, offset: Int): RomFsFileEntry? {
+        if (offset < 0 || offset + 0x20 > table.size) return null
+        val nameSize = table.leInt(offset + 0x1C)
+        val nameStart = offset + 0x20
+        val nameEnd = nameStart + nameSize
+        if (nameSize < 0 || nameEnd > table.size) return null
+        return RomFsFileEntry(
+            siblingOffset = table.leInt(offset + 0x4),
+            dataOffset = table.leLong(offset + 0x8),
+            size = table.leLong(offset + 0x10),
+            name = sanitizeNodeName(table.copyOfRange(nameStart, nameEnd).decodeToString()),
+        )
+    }
+
+    private data class RomFsDirectoryEntry(
+        val siblingOffset: Int,
+        val childOffset: Int,
+        val firstFileOffset: Int,
+        val name: String,
+    )
+
+    private data class RomFsFileEntry(
+        val siblingOffset: Int,
+        val dataOffset: Long,
+        val size: Long,
+        val name: String,
+    )
 
     private data class FlatEntry(
         val name: String,
