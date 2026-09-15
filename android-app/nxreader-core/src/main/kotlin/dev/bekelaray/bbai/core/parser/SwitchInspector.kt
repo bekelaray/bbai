@@ -181,8 +181,10 @@ class SwitchInspector(
                 MetadataField("Title ID", "%016X".format(header.leLong(0))),
                 MetadataField("Version", header.leInt(8).toUInt().toString()),
                 MetadataField("Meta type", header[0xC].toUByte().toString()),
+                MetadataField("Extended header size", header.leUShort(0xE).toString()),
                 MetadataField("Content count", header.leUShort(0x10).toString()),
                 MetadataField("Meta count", header.leUShort(0x12).toString()),
+                MetadataField("Attributes", "0x${header[0x14].toUByte().toString(16)}"),
                 MetadataField("Required system version", header.leInt(0x18).toUInt().toString()),
             ),
         )

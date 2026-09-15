@@ -70,6 +70,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
@@ -95,6 +98,7 @@ import androidx.media3.ui.PlayerView
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -313,8 +317,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message = app.getString(R.string.message_pick_output_dir)
             return
         }
-        exportJob?.cancel()
+        val previousJob = exportJob
         exportJob = viewModelScope.launch(Dispatchers.IO) {
+            previousJob?.cancelAndJoin()
             val detection = selectedInspection?.detection ?: node.detection
             _exportState.value = ExportState(
                 running = true,
@@ -345,6 +350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         cancelled = true,
                         logLines = _exportState.value.logLines + logLine(app.getString(R.string.message_export_cancelled)),
                     )
+                    throw cancelled
                 } else {
                     _exportState.value = _exportState.value.copy(
                         running = false,
@@ -384,11 +390,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message = app.getString(R.string.message_release_permission_failed)
             return
         }
-        if (uri == lastInputUri) {
+        if (uri == lastInputUri && permission?.isReadPermission == true) {
             lastInputUri = null
             prefs.edit().remove(PREF_LAST_INPUT).apply()
         }
-        if (uri == outputTreeUri) {
+        if (uri == outputTreeUri && permission?.isWritePermission == true) {
             outputTreeUri = null
             prefs.edit().remove(PREF_LAST_OUTPUT).apply()
         }
@@ -594,27 +600,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun copyFactoryToUri(factory: ReaderFactory, targetUri: Uri, totalSize: Long) {
         val reader = factory.openReader()
         try {
-            app.contentResolver.openOutputStream(targetUri, "rwt")?.use { output ->
-                val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
-                var copied = 0L
-                var lastLoggedProgress = -1
-                while (copied < reader.size) {
-                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                    val read = reader.readAt(copied, buffer, 0, minOf(buffer.size.toLong(), reader.size - copied).toInt())
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                    copied += read
-                    val progress = if (totalSize > 0) copied.toFloat() / totalSize.toFloat() else 0f
-                    _exportState.value = _exportState.value.copy(progress = progress, copiedBytes = copied)
-                    val rounded = (progress * 100).roundToInt()
-                    if (rounded % 10 == 0 && rounded != lastLoggedProgress) {
-                        lastLoggedProgress = rounded
-                        _exportState.value = _exportState.value.copy(
-                            logLines = _exportState.value.logLines + logLine("Export progress: $rounded%"),
-                        )
+            app.contentResolver.openFileDescriptor(targetUri, "rw")?.use { descriptor ->
+                FileOutputStream(descriptor.fileDescriptor).use { output ->
+                    output.channel.truncate(0L)
+                    val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
+                    var copied = 0L
+                    var lastLoggedProgress = -1
+                    while (copied < reader.size) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        val read = reader.readAt(copied, buffer, 0, minOf(buffer.size.toLong(), reader.size - copied).toInt())
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                        copied += read
+                        val progress = if (totalSize > 0) copied.toFloat() / totalSize.toFloat() else 0f
+                        _exportState.value = _exportState.value.copy(progress = progress, copiedBytes = copied)
+                        val rounded = (progress * 100).roundToInt()
+                        if (rounded % 10 == 0 && rounded != lastLoggedProgress) {
+                            lastLoggedProgress = rounded
+                            _exportState.value = _exportState.value.copy(
+                                logLines = _exportState.value.logLines + logLine("Export progress: $rounded%"),
+                            )
+                        }
                     }
                 }
-            } ?: error(app.getString(R.string.internal_unable_output_stream))
+            }
+                ?: error(app.getString(R.string.internal_unable_output_stream))
         } finally {
             reader.close()
         }
@@ -1150,7 +1160,12 @@ private fun WarningCard(text: String) {
 @Composable
 private fun StatusBanner(message: String?, onDismiss: () -> Unit) {
     if (message == null) return
-    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Info, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
