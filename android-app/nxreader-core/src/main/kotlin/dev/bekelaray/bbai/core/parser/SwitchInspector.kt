@@ -6,6 +6,7 @@ import dev.bekelaray.bbai.core.io.ascii
 import dev.bekelaray.bbai.core.io.hex
 import dev.bekelaray.bbai.core.io.leInt
 import dev.bekelaray.bbai.core.io.leLong
+import dev.bekelaray.bbai.core.io.leUShort
 import dev.bekelaray.bbai.core.io.readExactAt
 import dev.bekelaray.bbai.core.model.DetectionResult
 import dev.bekelaray.bbai.core.model.InspectionResult
@@ -91,6 +92,9 @@ class SwitchInspector(
         val stringTableSize = header.leInt(8)
         val entrySize = if (isHfs0) 0x40 else 0x18
         val headerSize = 0x10L + count.toLong() * entrySize + stringTableSize.toLong()
+        if (count < 0 || stringTableSize < 0 || headerSize < 0 || headerSize > reader.size) {
+            return invalid(displayName, reader.size, if (isHfs0) SwitchFileKind.HFS0 else SwitchFileKind.PFS0)
+        }
         val flatEntries = mutableListOf<FlatEntry>()
         for (index in 0 until count) {
             val entry = reader.readExactAt(0x10L + index.toLong() * entrySize, entrySize)
@@ -98,6 +102,8 @@ class SwitchInspector(
             val offset = entry.leLong(0)
             val size = entry.leLong(8)
             val stringOffset = entry.leInt(16)
+            if (stringOffset < 0 || stringOffset >= stringTableSize) continue
+            if (offset < 0 || size < 0 || headerSize + offset > reader.size || size > reader.size - headerSize - offset) continue
             val nameBytes = readNullTerminated(reader, 0x10L + count.toLong() * entrySize + stringOffset, 0x200)
             val name = sanitizeNodeName(nameBytes.decodeToString().ifBlank { "entry_$index" })
             val path = sanitizeRelativePath(name)
@@ -175,8 +181,8 @@ class SwitchInspector(
                 MetadataField("Title ID", header.hex(0, 8)),
                 MetadataField("Version", header.leInt(8).toUInt().toString()),
                 MetadataField("Meta type", header[0xC].toUByte().toString()),
-                MetadataField("Content count", header.leInt(0x10).toString()),
-                MetadataField("Meta count", header.leInt(0x12).toString()),
+                MetadataField("Content count", header.leUShort(0x10).toString()),
+                MetadataField("Meta count", header.leUShort(0x12).toString()),
                 MetadataField("Required system version", header.leInt(0x18).toUInt().toString()),
             ),
         )
@@ -311,14 +317,44 @@ class SwitchInspector(
         warnings = listOf("A future revision may query user-supplied lawful key material through an abstraction boundary without bundling keys."),
     )
 
+    fun detectByName(displayName: String): DetectionResult {
+        val lower = displayName.lowercase()
+        return when {
+            lower.endsWith(".nsp") -> DetectionResult(SwitchFileKind.NSP)
+            lower.endsWith(".xci") -> DetectionResult(SwitchFileKind.XCI)
+            lower.endsWith(".nca") -> DetectionResult(SwitchFileKind.NCA)
+            lower.endsWith(".ncz") -> DetectionResult(SwitchFileKind.NCZ)
+            lower.endsWith(".romfs") -> DetectionResult(SwitchFileKind.ROMFS)
+            lower.endsWith(".exefs") -> DetectionResult(SwitchFileKind.EXEFS)
+            lower.endsWith(".cnmt") || lower.contains(".cnmt.") -> DetectionResult(SwitchFileKind.CNMT)
+            lower.endsWith(".nacp") -> DetectionResult(SwitchFileKind.NACP)
+            lower.endsWith(".npdm") -> DetectionResult(SwitchFileKind.NPDM)
+            lower.endsWith(".nro") -> DetectionResult(SwitchFileKind.NRO)
+            lower.endsWith(".nso") -> DetectionResult(SwitchFileKind.NSO)
+            lower.endsWith(".kip") || lower.endsWith(".kip1") -> DetectionResult(SwitchFileKind.KIP)
+            lower.endsWith(".png") -> DetectionResult(SwitchFileKind.IMAGE, "image/png")
+            lower.endsWith(".jpg") || lower.endsWith(".jpeg") -> DetectionResult(SwitchFileKind.IMAGE, "image/jpeg")
+            lower.endsWith(".webp") -> DetectionResult(SwitchFileKind.IMAGE, "image/webp")
+            lower.endsWith(".mp3") -> DetectionResult(SwitchFileKind.AUDIO, "audio/mpeg")
+            lower.endsWith(".wav") -> DetectionResult(SwitchFileKind.AUDIO, "audio/wav")
+            lower.endsWith(".ogg") -> DetectionResult(SwitchFileKind.AUDIO, "audio/ogg")
+            lower.endsWith(".flac") -> DetectionResult(SwitchFileKind.AUDIO, "audio/flac")
+            lower.endsWith(".mp4") -> DetectionResult(SwitchFileKind.VIDEO, "video/mp4")
+            lower.endsWith(".webm") -> DetectionResult(SwitchFileKind.VIDEO, "video/webm")
+            else -> DetectionResult(SwitchFileKind.UNKNOWN)
+        }
+    }
+
     suspend fun detect(displayName: String, reader: RandomAccessReader): DetectionResult {
+        val byName = detectByName(displayName)
         val lower = displayName.lowercase()
         val magic0 = reader.readExactAt(0, min(reader.size, 0x110).toInt())
         val magicAt0 = if (magic0.size >= 4) magic0.ascii(0, 4) else ""
         val magicAt10 = if (magic0.size >= 0x14) magic0.ascii(0x10, 4) else ""
         val magicAt100 = if (magic0.size >= 0x104) magic0.ascii(0x100, 4) else ""
         return when {
-            magicAt0 == "PFS0" || lower.endsWith(".nsp") -> DetectionResult(SwitchFileKind.NSP)
+            lower.endsWith(".nsp") -> DetectionResult(SwitchFileKind.NSP)
+            magicAt0 == "PFS0" -> DetectionResult(SwitchFileKind.PFS0)
             magicAt0 == "HFS0" -> DetectionResult(SwitchFileKind.HFS0)
             lower.endsWith(".xci") || magicAt100 == "HEAD" -> DetectionResult(SwitchFileKind.XCI)
             lower.endsWith(".nca") -> DetectionResult(SwitchFileKind.NCA)
@@ -340,7 +376,7 @@ class SwitchInspector(
             isFlac(magic0) -> DetectionResult(SwitchFileKind.AUDIO, "audio/flac")
             isMp4(magic0, lower) -> DetectionResult(SwitchFileKind.VIDEO, "video/mp4")
             isWebm(magic0, lower) -> DetectionResult(SwitchFileKind.VIDEO, "video/webm")
-            else -> DetectionResult(SwitchFileKind.UNKNOWN)
+            else -> byName
         }
     }
 

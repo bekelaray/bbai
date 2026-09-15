@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">BBAI Switch Reader</string>
+    <string name="support_pfs_hfs_exefs">• 真实目录读取：PFS0/NSP、HFS0/XCI 根分区、ExeFS</string>
+    <string name="support_input_directory">• SAF 输入目录浏览：本地目录及其支持的子文件</string>
+    <string name="support_metadata">• 基础元数据：CNMT、NACP、NPDM、NRO、NSO、KIP</string>
+    <string name="support_media_preview">• 媒体预览：PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM（可预览时预览，否则导出回退）</string>
+    <string name="support_deferred_types">• NCA/NCZ、RomFS 目前仅识别和显示不支持/需合法密钥状态</string>
+    <string name="future_romfs">• RomFS 真实浏览</string>
 </resources>

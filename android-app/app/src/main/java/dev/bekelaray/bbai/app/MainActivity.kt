@@ -66,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,6 +78,7 @@ import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import dev.bekelaray.bbai.app.ui.theme.BbaiTheme
 import dev.bekelaray.bbai.core.io.RandomAccessReader
+import dev.bekelaray.bbai.core.io.OwnedSliceReadSource
 import dev.bekelaray.bbai.core.io.SliceReadSource
 import dev.bekelaray.bbai.core.model.DetectionResult
 import dev.bekelaray.bbai.core.model.InspectionResult
@@ -136,10 +138,13 @@ class MainActivity : ComponentActivity() {
 private const val PREFS_NAME = "bbai_prefs"
 private const val PREF_LAST_INPUT = "last_input"
 private const val PREF_LAST_OUTPUT = "last_output"
-private const val PREVIEW_CACHE_LIMIT = 128L * 1024L * 1024L
-private const val BUFFER_SIZE = 128 * 1024
-private const val INPUT_SCAN_LIMIT = 2_000
-private const val INPUT_SCAN_DEPTH_LIMIT = 12
+
+private object AppConfig {
+    const val previewCacheLimitBytes = 128L * 1024L * 1024L
+    const val exportBufferSizeBytes = 128 * 1024
+    const val inputScanLimit = 2_000
+    const val inputScanDepthLimit = 12
+}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application
@@ -178,29 +183,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var exportJob: Job? = null
 
     fun onInputPicked(uri: Uri) {
-        persistUri(uri)
-        lastInputUri = uri
-        prefs.edit().putString(PREF_LAST_INPUT, uri.toString()).apply()
+        rememberInputIfPersisted(uri)
         openInput(uri)
     }
 
     fun onInputDirectoryPicked(uri: Uri) {
-        persistUri(uri)
-        lastInputUri = uri
-        prefs.edit().putString(PREF_LAST_INPUT, uri.toString()).apply()
+        rememberInputIfPersisted(uri)
         openInput(uri)
     }
 
     fun onOutputPicked(uri: Uri) {
-        persistUri(uri)
         outputTreeUri = uri
-        prefs.edit().putString(PREF_LAST_OUTPUT, uri.toString()).apply()
+        if (persistOutputUri(uri)) {
+            prefs.edit().putString(PREF_LAST_OUTPUT, uri.toString()).apply()
+            message = "Output directory saved."
+        } else {
+            prefs.edit().remove(PREF_LAST_OUTPUT).apply()
+            message = "Output directory is available for now, but persistent permission was not granted."
+        }
         persistedUris = loadPersistedUris()
-        message = "Output directory saved."
     }
 
     fun reopenLastInput() {
-        lastInputUri?.let(::openInput) ?: run { message = "No remembered input file." }
+        lastInputUri?.let(::openInput) ?: run { message = "No remembered input source." }
     }
 
     fun navigate(screen: Screen) {
@@ -281,7 +286,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             isBusy = true
             try {
-                if (node.size > PREVIEW_CACHE_LIMIT) {
+                if (node.size > AppConfig.previewCacheLimitBytes) {
                     message = "Preview fallback: file is large, export it instead."
                     return@launch
                 }
@@ -309,9 +314,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val detection = selectedInspection?.detection ?: node.detection
             _exportState.value = ExportState(
                 running = true,
+                cancelled = false,
                 title = node.name,
                 progress = 0f,
+                copiedBytes = 0L,
                 totalBytes = node.size,
+                outputUri = null,
+                error = null,
                 logLines = listOf(logLine("Export started: ${node.path}")),
             )
             try {
@@ -348,10 +357,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun releasePersistedUri(uri: Uri) {
+        val permission = app.contentResolver.persistedUriPermissions.firstOrNull { it.uri == uri }
+        val flags = buildPermissionFlags(permission?.isReadPermission == true, permission?.isWritePermission == true)
         runCatching {
             app.contentResolver.releasePersistableUriPermission(
                 uri,
-                IntentFlags,
+                flags,
             )
         }
         if (uri == lastInputUri) {
@@ -470,7 +481,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun inspectDirectory(root: DocumentFile): InspectionResult {
-        val counter = ScanCounter(INPUT_SCAN_LIMIT)
+        val counter = ScanCounter(AppConfig.inputScanLimit)
         val entries = scanDirectory(root, "", 0, counter)
         return InspectionResult(
             displayName = root.name ?: "selected-directory",
@@ -480,11 +491,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             metadata = listOf(
                 MetadataField("Detected type", "DIRECTORY"),
                 MetadataField("Source URI", root.uri.toString()),
-                MetadataField("Scanned entries", (INPUT_SCAN_LIMIT - counter.remaining).toString()),
-                MetadataField("Scan limit", INPUT_SCAN_LIMIT.toString()),
+                MetadataField("Scanned entries", (AppConfig.inputScanLimit - counter.remaining).toString()),
+                MetadataField("Scan limit", AppConfig.inputScanLimit.toString()),
             ),
             entries = entries,
-            warnings = if (counter.truncated) listOf("Directory scan stopped after $INPUT_SCAN_LIMIT nodes to avoid excessive memory use.") else emptyList(),
+            warnings = if (counter.truncated) listOf("Directory scan stopped after ${AppConfig.inputScanLimit} nodes to avoid excessive memory use.") else emptyList(),
         )
     }
 
@@ -494,7 +505,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         depth: Int,
         counter: ScanCounter,
     ): List<VirtualNode> {
-        if (depth > INPUT_SCAN_DEPTH_LIMIT || counter.remaining <= 0) return emptyList()
+        if (depth > AppConfig.inputScanDepthLimit || counter.remaining <= 0) return emptyList()
         val children = directory.listFiles().sortedWith(compareBy<DocumentFile>({ !it.isDirectory }, { it.name.orEmpty().lowercase() }))
         return buildList {
             for (child in children) {
@@ -519,7 +530,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 } else {
                     val size = child.length().takeIf { it >= 0 } ?: 0L
-                    val detection = detectUriBackedFile(child, size)
+                    val detection = inspector.detectByName(child.name ?: "selected-file")
                     add(
                         VirtualNode(
                             name = safeName,
@@ -536,15 +547,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun detectUriBackedFile(document: DocumentFile, size: Long): DetectionResult {
-        val name = document.name ?: "selected-file"
-        return runCatching {
-            UriReaderFactory(app, document.uri, name, size).openReader().use { reader ->
-                inspector.detect(name, reader)
-            }
-        }.getOrElse { DetectionResult(SwitchFileKind.UNKNOWN, notes = listOf("Detection failed: ${it.message ?: "unknown error"}")) }
-    }
-
     private suspend fun materializeToCache(factory: ReaderFactory, relativePath: String): File {
         val sanitized = sanitizeRelativePath(relativePath)
         val target = File(app.cacheDir, sanitized.replace('/', '_'))
@@ -552,7 +554,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val reader = factory.openReader()
         try {
             FileOutputStream(target).use { output ->
-                val buffer = ByteArray(BUFFER_SIZE)
+                val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
                 var position = 0L
                 while (position < reader.size) {
                     val read = reader.readAt(position, buffer, 0, minOf(buffer.size.toLong(), reader.size - position).toInt())
@@ -571,7 +573,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val reader = factory.openReader()
         try {
             app.contentResolver.openOutputStream(targetUri, "w")?.use { output ->
-                val buffer = ByteArray(BUFFER_SIZE)
+                val buffer = ByteArray(AppConfig.exportBufferSizeBytes)
                 var copied = 0L
                 var lastLoggedProgress = -1
                 while (copied < reader.size) {
@@ -610,11 +612,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?: error("Failed to create output file.")
     }
 
-    private fun persistUri(uri: Uri) {
-        runCatching {
-            app.contentResolver.takePersistableUriPermission(uri, IntentFlags)
-        }
+    private fun persistInputUri(uri: Uri): Boolean {
+        val persisted = runCatching {
+            app.contentResolver.takePersistableUriPermission(uri, ReadPermissionFlag)
+        }.isSuccess
         persistedUris = loadPersistedUris()
+        return persisted
+    }
+
+    private fun persistOutputUri(uri: Uri): Boolean {
+        val persisted = runCatching {
+            app.contentResolver.takePersistableUriPermission(uri, ReadWritePermissionFlags)
+        }.isSuccess
+        persistedUris = loadPersistedUris()
+        return persisted
+    }
+
+    private fun rememberInputIfPersisted(uri: Uri) {
+        if (persistInputUri(uri)) {
+            lastInputUri = uri
+            prefs.edit().putString(PREF_LAST_INPUT, uri.toString()).apply()
+        } else {
+            lastInputUri = null
+            prefs.edit().remove(PREF_LAST_INPUT).apply()
+            message = "Input opened for this session, but persistent permission was not granted."
+        }
     }
 
     private fun loadPersistedUris(): List<Uri> =
@@ -637,10 +659,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
-        private const val IntentFlags =
-            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        private const val ReadPermissionFlag = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+        private const val WritePermissionFlag = android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        private const val ReadWritePermissionFlags = ReadPermissionFlag or WritePermissionFlag
     }
 }
+
+private fun buildPermissionFlags(read: Boolean, write: Boolean): Int =
+    (if (read) android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+        (if (write) android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
 
 private data class BrowserSession(
     val label: String,
@@ -700,7 +727,10 @@ private class SliceReaderFactory(
     private val length: Long,
     override val displayName: String,
 ) : ReaderFactory {
-    override suspend fun openReader(): RandomAccessReader = SliceReadSource(parent.openReader(), baseOffset, length)
+    override suspend fun openReader(): RandomAccessReader {
+        val parentReader = parent.openReader()
+        return OwnedSliceReadSource(parentReader, SliceReadSource(parentReader, baseOffset, length))
+    }
 }
 
 private class AndroidUriReader(
@@ -840,11 +870,11 @@ private fun HomeScreen(
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("支持范围")
-                    Text("• 真实目录读取：PFS0/NSP、HFS0/XCI 根分区、ExeFS")
-                    Text("• SAF 输入目录浏览：本地目录及其支持的子文件")
-                    Text("• 基础元数据：CNMT、NACP、NPDM、NRO、NSO、KIP")
-                    Text("• 媒体预览：PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM（可预览时预览，否则导出回退）")
-                    Text("• NCA/NCZ、RomFS、ExeFS 目前仅识别和显示不支持/需合法密钥状态")
+                    Text(stringResource(R.string.support_pfs_hfs_exefs))
+                    Text(stringResource(R.string.support_input_directory))
+                    Text(stringResource(R.string.support_metadata))
+                    Text(stringResource(R.string.support_media_preview))
+                    Text(stringResource(R.string.support_deferred_types))
                 }
             }
         }
@@ -1006,7 +1036,7 @@ private fun SettingsScreen(viewModel: MainViewModel) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("后续建议补充")
-                    Text("• RomFS/ExeFS 真实浏览")
+                    Text(stringResource(R.string.future_romfs))
                     Text("• 合法密钥接口注入与仅在用户提供密钥时的受控解密")
                     Text("• Switch 专有纹理/音频容器解码")
                     Text("• 更持久的后台任务（如 WorkManager）")

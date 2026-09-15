@@ -22,6 +22,19 @@ class SliceReadSource(
         return parent.readAt(baseOffset + position, buffer, offset, boundedLength)
     }
 
+    override fun close() = Unit
+}
+
+class OwnedSliceReadSource(
+    private val parent: RandomAccessReader,
+    private val delegate: SliceReadSource,
+) : RandomAccessReader {
+    override val size: Long
+        get() = delegate.size
+
+    override suspend fun readAt(position: Long, buffer: ByteArray, offset: Int, length: Int): Int =
+        delegate.readAt(position, buffer, offset, length)
+
     override fun close() {
         parent.close()
     }
@@ -44,6 +57,11 @@ fun ByteArray.leInt(offset: Int): Int {
         ((this[offset + 1].toInt() and 0xFF) shl 8) or
         ((this[offset + 2].toInt() and 0xFF) shl 16) or
         ((this[offset + 3].toInt() and 0xFF) shl 24)
+}
+
+fun ByteArray.leUShort(offset: Int): Int {
+    return (this[offset].toInt() and 0xFF) or
+        ((this[offset + 1].toInt() and 0xFF) shl 8)
 }
 
 fun ByteArray.leLong(offset: Int): Long {
