@@ -255,7 +255,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val node = selectedNode ?: return
         val current = sessionStack.lastOrNull() ?: return
         val detectionKind = selectedInspection?.detection?.kind ?: node.detection.kind
-        if (detectionKind !in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI)) {
+        if (detectionKind !in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS)) {
             message = "This file is not a readable archive in the current build."
             return
         }
@@ -840,7 +840,7 @@ private fun HomeScreen(
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("支持范围")
-                    Text("• 真实目录读取：PFS0/NSP、HFS0/XCI 根分区")
+                    Text("• 真实目录读取：PFS0/NSP、HFS0/XCI 根分区、ExeFS")
                     Text("• SAF 输入目录浏览：本地目录及其支持的子文件")
                     Text("• 基础元数据：CNMT、NACP、NPDM、NRO、NSO、KIP")
                     Text("• 媒体预览：PNG/JPEG/WebP、MP3/WAV/OGG/FLAC、MP4/WebM（可预览时预览，否则导出回退）")
@@ -901,7 +901,7 @@ private fun DetailScreen(viewModel: MainViewModel) {
     val inspection = viewModel.selectedInspection
     val detection = inspection?.detection ?: node.detection
     val canPreview = detection.kind in setOf(SwitchFileKind.IMAGE, SwitchFileKind.AUDIO, SwitchFileKind.VIDEO)
-    val canBrowse = detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI)
+    val canBrowse = detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS)
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1155,7 +1155,7 @@ private fun iconFor(node: VirtualNode) = when {
     node.detection.kind == SwitchFileKind.IMAGE -> Icons.Default.Description
     node.detection.kind == SwitchFileKind.AUDIO -> Icons.Default.MusicNote
     node.detection.kind == SwitchFileKind.VIDEO -> Icons.Default.Movie
-    node.detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI) -> Icons.Default.Folder
+    node.detection.kind in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS) -> Icons.Default.Folder
     node.detection.kind in setOf(SwitchFileKind.NCA, SwitchFileKind.NCZ) -> Icons.Default.Warning
     else -> Icons.Default.Description
 }

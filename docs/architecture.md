@@ -18,7 +18,7 @@ android-app/
 └── nxreader-core/
     ├── random-access reader abstractions
     ├── file-kind detection
-    ├── PFS0 / HFS0 parsing
+    ├── PFS0 / HFS0 / ExeFS parsing
     ├── CNMT / NACP / NPDM basic metadata parsing
     ├── NRO / NSO / KIP header recognition placeholders
     └── lawful key-provider abstraction boundary
@@ -40,7 +40,7 @@ The first implementation pass favors the most stable and maintainable approach o
 
 - Detect container and media types from extension and magic bytes
 - Browse SAF-selected input directories without hard-coded storage paths
-- Read actual entry tables for clear-text PFS0/NSP and HFS0 containers
+- Read actual entry tables for clear-text PFS0/NSP, HFS0, and ExeFS containers
 - Inspect the root HFS0 inside XCI when discoverable
 - Display metadata, tree structure, offsets, sizes, and support status
 - Preview common Android-supported media after safe cache materialization
@@ -48,7 +48,7 @@ The first implementation pass favors the most stable and maintainable approach o
 
 ## Deferred behaviors
 
-- RomFS / ExeFS filesystem walking
+- RomFS filesystem walking
 - lawful key-provider abstraction wired into future NCA parsing
 - Switch-specific texture/audio/video decoding
 - persistent background workers beyond in-process coroutines

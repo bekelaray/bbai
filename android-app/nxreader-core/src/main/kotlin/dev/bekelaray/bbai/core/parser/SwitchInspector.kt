@@ -26,6 +26,7 @@ class SwitchInspector(
             -> inspectPartitionFs(displayName, reader, baseOffset = 0L, isHfs0 = false)
             SwitchFileKind.XCI -> inspectXci(displayName, reader)
             SwitchFileKind.HFS0 -> inspectPartitionFs(displayName, reader, baseOffset = 0L, isHfs0 = true)
+            SwitchFileKind.EXEFS -> inspectExeFs(displayName, reader)
             SwitchFileKind.CNMT -> inspectCnmt(displayName, reader)
             SwitchFileKind.NACP -> inspectNacp(displayName, reader)
             SwitchFileKind.NPDM -> inspectNpdm(displayName, reader)
@@ -36,7 +37,6 @@ class SwitchInspector(
             SwitchFileKind.NCZ,
             -> encryptedOrDeferred(displayName, reader.size, detection)
             SwitchFileKind.ROMFS,
-            SwitchFileKind.EXEFS,
             -> unsupported(displayName, reader.size, detection, "Specialized filesystem parsing remains deferred in this build.")
             else -> InspectionResult(
                 displayName = displayName,
@@ -122,6 +122,44 @@ class SwitchInspector(
                 MetadataField("Header size", headerSize.toString()),
             ),
             entries = buildTree(flatEntries),
+        )
+    }
+
+    private suspend fun inspectExeFs(displayName: String, reader: RandomAccessReader): InspectionResult {
+        val header = reader.readExactAt(0, min(reader.size, 0x200).toInt())
+        if (header.size < 0xC0) return invalid(displayName, reader.size, SwitchFileKind.EXEFS)
+        val entries = mutableListOf<FlatEntry>()
+        var nonEmptyCount = 0
+        repeat(10) { index ->
+            val entryOffset = index * 0x10
+            val name = header.ascii(entryOffset, 0x8)
+            val offset = header.leInt(entryOffset + 0x8).toUInt().toLong()
+            val size = header.leInt(entryOffset + 0xC).toUInt().toLong()
+            if (name.isBlank() || size == 0L) return@repeat
+            if (offset > reader.size || size > reader.size || 0x200L + offset + size > reader.size) return@repeat
+            nonEmptyCount += 1
+            val fileName = normalizeExeFsName(name)
+            val fileReader = SliceReadSource(reader, 0x200L + offset, size)
+            entries += FlatEntry(
+                name = fileName,
+                path = fileName,
+                offset = 0x200L + offset,
+                size = size,
+                detection = detect(fileName, fileReader),
+            )
+        }
+        return InspectionResult(
+            displayName = displayName,
+            size = reader.size,
+            detection = DetectionResult(SwitchFileKind.EXEFS),
+            supportStatus = if (nonEmptyCount > 0) SupportStatus.SUPPORTED else SupportStatus.INVALID,
+            metadata = listOf(
+                MetadataField("Detected type", SwitchFileKind.EXEFS.name),
+                MetadataField("Header size", "512"),
+                MetadataField("Entry count", nonEmptyCount.toString()),
+            ),
+            entries = buildTree(entries),
+            warnings = if (nonEmptyCount == 0) listOf("No readable ExeFS entries were found in the header.") else emptyList(),
         )
     }
 
@@ -286,7 +324,7 @@ class SwitchInspector(
             lower.endsWith(".nca") -> DetectionResult(SwitchFileKind.NCA)
             lower.endsWith(".ncz") -> DetectionResult(SwitchFileKind.NCZ)
             lower.endsWith(".romfs") -> DetectionResult(SwitchFileKind.ROMFS)
-            lower.endsWith(".exefs") -> DetectionResult(SwitchFileKind.EXEFS)
+            lower.endsWith(".exefs") || looksLikeExeFs(magic0) -> DetectionResult(SwitchFileKind.EXEFS)
             lower.endsWith(".cnmt") || lower.contains(".cnmt.") -> DetectionResult(SwitchFileKind.CNMT)
             lower.endsWith(".nacp") -> DetectionResult(SwitchFileKind.NACP)
             lower.endsWith(".npdm") || magicAt0 == "META" -> DetectionResult(SwitchFileKind.NPDM)
@@ -315,6 +353,23 @@ class SwitchInspector(
     private fun isFlac(bytes: ByteArray) = bytes.size >= 4 && bytes.ascii(0, 4) == "fLaC"
     private fun isMp4(bytes: ByteArray, lower: String) = lower.endsWith(".mp4") || (bytes.size >= 12 && bytes.ascii(4, 4) == "ftyp")
     private fun isWebm(bytes: ByteArray, lower: String) = lower.endsWith(".webm") || (bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(byteArrayOf(0x1A, 0x45, 0xDF.toByte(), 0xA3.toByte())))
+    private fun looksLikeExeFs(bytes: ByteArray): Boolean {
+        if (bytes.size < 0xC0) return false
+        var nonEmpty = 0
+        repeat(10) { index ->
+            val entryOffset = index * 0x10
+            val nameBytes = bytes.copyOfRange(entryOffset, entryOffset + 0x8)
+            val size = bytes.leInt(entryOffset + 0xC).toUInt().toLong()
+            val asciiish = nameBytes.all { byte ->
+                byte == 0.toByte() || byte.toInt() in 0x20..0x7E
+            }
+            if (!asciiish) return false
+            if (nameBytes.any { it != 0.toByte() } && size > 0L) {
+                nonEmpty += 1
+            }
+        }
+        return nonEmpty > 0
+    }
 
     private suspend fun readNullTerminated(reader: RandomAccessReader, position: Long, maxLength: Int): ByteArray {
         val raw = reader.readExactAt(position, maxLength)
@@ -359,6 +414,13 @@ class SwitchInspector(
             .filter { it.isNotBlank() && it != "." && it != ".." }
             .joinToString("/") { segment -> segment.replace(Regex("[^A-Za-z0-9._ -]"), "_") }
             .ifBlank { "unnamed" }
+
+    private fun normalizeExeFsName(name: String): String = when (name) {
+        "main" -> "main.nso"
+        "subsdk0", "subsdk1", "subsdk2", "subsdk3", "subsdk4", "subsdk5", "subsdk6", "subsdk7", "sdk" -> "$name.nso"
+        "main.npdm" -> name
+        else -> name
+    }
 
     private data class FlatEntry(
         val name: String,
