@@ -196,16 +196,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         outputTreeUri = uri
         if (persistOutputUri(uri)) {
             prefs.edit().putString(PREF_LAST_OUTPUT, uri.toString()).apply()
-            message = "Output directory saved."
+            message = app.getString(R.string.message_output_saved)
         } else {
             prefs.edit().remove(PREF_LAST_OUTPUT).apply()
-            message = "Output directory is available for now, but persistent permission was not granted."
+            message = app.getString(R.string.message_output_not_persisted)
         }
         persistedUris = loadPersistedUris()
     }
 
     fun reopenLastInput() {
-        lastInputUri?.let(::openInput) ?: run { message = "No remembered input source." }
+        lastInputUri?.let(::openInput) ?: run { message = app.getString(R.string.message_no_remembered_input) }
     }
 
     fun navigate(screen: Screen) {
@@ -261,11 +261,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = sessionStack.lastOrNull() ?: return
         val detectionKind = selectedInspection?.detection?.kind ?: node.detection.kind
         if (detectionKind !in setOf(SwitchFileKind.PFS0, SwitchFileKind.NSP, SwitchFileKind.HFS0, SwitchFileKind.XCI, SwitchFileKind.EXEFS)) {
-            message = "This file is not a readable archive in the current build."
+            message = app.getString(R.string.message_not_readable_archive)
             return
         }
         val factory = factoryForNode(current, node) ?: run {
-            message = "Unable to open this node."
+            message = app.getString(R.string.message_unable_open_node)
             return
         }
         inspectAndPush(factory)
@@ -276,25 +276,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = sessionStack.lastOrNull() ?: return
         val detection = selectedInspection?.detection ?: node.detection
         if (detection.kind !in setOf(SwitchFileKind.IMAGE, SwitchFileKind.AUDIO, SwitchFileKind.VIDEO)) {
-            message = "Preview is only available for supported media files."
+            message = app.getString(R.string.message_preview_supported_only)
             return
         }
         val sourceFactory = factoryForNode(current, node) ?: run {
-            message = "Unable to read this node."
+            message = app.getString(R.string.message_unable_read_node)
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
             isBusy = true
             try {
                 if (node.size > AppConfig.previewCacheLimitBytes) {
-                    message = "Preview fallback: file is large, export it instead."
+                    message = app.getString(R.string.message_preview_large)
                     return@launch
                 }
                 val cached = materializeToCache(sourceFactory, node.path)
                 previewState = PreviewState(node.name, detection, Uri.fromFile(cached), node.size)
                 currentScreen = Screen.Preview
             } catch (error: Exception) {
-                message = "Preview failed: ${error.message ?: "unknown error"}"
+                message = app.getString(R.string.message_preview_failed, error.message ?: app.getString(R.string.message_unknown_error))
             } finally {
                 isBusy = false
             }
@@ -306,7 +306,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val node = selectedNode
         val current = sessionStack.lastOrNull()
         if (targetTree == null || node == null || current == null) {
-            message = "Pick an output directory first."
+            message = app.getString(R.string.message_pick_output_dir)
             return
         }
         exportJob?.cancel()
@@ -325,7 +325,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             try {
                 val file = ensureOutputFile(targetTree, node.path, detection.mimeType)
-                val factory = factoryForNode(current, node) ?: error("Unable to read this node.")
+                val factory = factoryForNode(current, node) ?: error(app.getString(R.string.message_unable_read_node))
                 copyFactoryToUri(factory, file.uri, node.size)
                 _exportState.value = _exportState.value.copy(
                     running = false,
@@ -361,7 +361,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val flags = buildPermissionFlags(permission?.isReadPermission == true, permission?.isWritePermission == true)
         if (flags == 0) {
             persistedUris = loadPersistedUris()
-            message = "No persisted permission exists for this URI."
+            message = app.getString(R.string.message_no_persisted_permission)
             return
         }
         val released = runCatching {
@@ -372,7 +372,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.isSuccess
         if (!released) {
             persistedUris = loadPersistedUris()
-            message = "Failed to release the persisted permission."
+            message = app.getString(R.string.message_release_permission_failed)
             return
         }
         if (uri == lastInputUri) {
@@ -413,7 +413,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sortMode = SortMode.NAME
                 currentScreen = Screen.Browser
             } catch (error: Exception) {
-                message = "Open directory failed: ${error.message ?: "unknown error"}"
+                message = app.getString(R.string.message_open_directory_failed, error.message ?: app.getString(R.string.message_unknown_error))
             } finally {
                 isBusy = false
             }
@@ -434,7 +434,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sortMode = SortMode.NAME
                 currentScreen = Screen.Browser
             } catch (error: Exception) {
-                message = "Open failed: ${error.message ?: "unknown error"}"
+                message = app.getString(R.string.message_open_failed, error.message ?: app.getString(R.string.message_unknown_error))
             } finally {
                 isBusy = false
             }
@@ -453,7 +453,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 previewState = null
                 currentScreen = Screen.Browser
             } catch (error: Exception) {
-                message = "Browse failed: ${error.message ?: "unknown error"}"
+                message = app.getString(R.string.message_browse_failed, error.message ?: app.getString(R.string.message_unknown_error))
             } finally {
                 isBusy = false
             }
@@ -465,7 +465,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             isBusy = true
             try {
-                val factory = factoryForNode(current, node) ?: error("Unable to read this node.")
+                val factory = factoryForNode(current, node) ?: error(app.getString(R.string.message_unable_read_node))
                 selectedInspection = inspect(factory)
             } catch (error: Exception) {
                 selectedInspection = InspectionResult(
@@ -473,7 +473,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     size = node.size,
                     detection = node.detection,
                     supportStatus = SupportStatus.INVALID,
-                    metadata = listOf(MetadataField("Status", error.message ?: "Unable to inspect entry.")),
+                    metadata = listOf(MetadataField("Status", error.message ?: app.getString(R.string.message_unknown_error))),
                 )
             } finally {
                 isBusy = false
@@ -602,29 +602,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                 }
-            } ?: error("Unable to open output stream.")
+            } ?: error(app.getString(R.string.internal_unable_output_stream))
         } finally {
             reader.close()
         }
     }
 
     private fun ensureOutputFile(treeUri: Uri, relativePath: String, mimeType: String?): DocumentFile {
-        val tree = DocumentFile.fromTreeUri(app, treeUri) ?: error("Output directory is unavailable.")
+        val tree = DocumentFile.fromTreeUri(app, treeUri) ?: error(app.getString(R.string.internal_output_dir_unavailable))
         val cleanPath = sanitizeRelativePath(relativePath)
         val parts = cleanPath.split('/')
         var current = tree
         parts.dropLast(1).forEach { folder ->
             val existing = current.findFile(folder)
             current = when {
-                existing == null -> current.createDirectory(folder) ?: error("Failed to create $folder")
+                existing == null -> current.createDirectory(folder) ?: error(app.getString(R.string.internal_failed_create_folder, folder))
                 existing.isDirectory -> existing
-                else -> error("Cannot export because $folder already exists as a file.")
+                else -> error(app.getString(R.string.internal_export_path_file_collision, folder))
             }
         }
         val filename = parts.last()
-        val availableName = nextAvailableChildName(current, filename)
-        return current.createFile(mimeType ?: "application/octet-stream", availableName)
-            ?: error("Failed to create output file.")
+        current.findFile(filename)?.let { existing ->
+            return when {
+                existing.isDirectory -> error(app.getString(R.string.internal_export_path_directory_collision, filename))
+                else -> existing
+            }
+        }
+        return current.createFile(mimeType ?: "application/octet-stream", filename)
+            ?: current.createFile(
+                mimeType ?: "application/octet-stream",
+                nextAvailableChildName(current, filename, app.getString(R.string.internal_unable_allocate_export_name)),
+            )
+            ?: error(app.getString(R.string.internal_failed_create_output))
     }
 
     private fun persistInputUri(uri: Uri): Boolean {
@@ -650,7 +659,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             lastInputUri = null
             prefs.edit().remove(PREF_LAST_INPUT).apply()
-            message = "Input opened for this session, but persistent permission was not granted."
+            message = app.getString(R.string.message_input_not_persisted)
         }
     }
 
@@ -684,7 +693,7 @@ private fun buildPermissionFlags(read: Boolean, write: Boolean): Int =
     (if (read) android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
         (if (write) android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
 
-private fun nextAvailableChildName(parent: DocumentFile, requestedName: String): String {
+private fun nextAvailableChildName(parent: DocumentFile, requestedName: String, allocationError: String): String {
     val dotIndex = requestedName.lastIndexOf('.')
     val baseName = if (dotIndex > 0) requestedName.substring(0, dotIndex) else requestedName
     val extension = if (dotIndex > 0) requestedName.substring(dotIndex) else ""
@@ -699,7 +708,7 @@ private fun nextAvailableChildName(parent: DocumentFile, requestedName: String):
             throw IllegalStateException("Cannot export because $candidate already exists as a directory.")
         }
     }
-    error("Unable to allocate an export filename.")
+    error(allocationError)
 }
 
 private data class BrowserSession(
@@ -771,7 +780,7 @@ private class AndroidUriReader(
     uri: Uri,
     sizeHint: Long,
 ) : RandomAccessReader {
-    private val descriptor = application.contentResolver.openFileDescriptor(uri, "r") ?: error("Unable to open file descriptor.")
+    private val descriptor = application.contentResolver.openFileDescriptor(uri, "r") ?: error(application.getString(R.string.internal_unable_open_fd))
     private val channel: FileChannel = FileInputStream(descriptor.fileDescriptor).channel
     override val size: Long = sizeHint.takeIf { it > 0 } ?: descriptor.statSize.takeIf { it > 0 } ?: channel.size()
 
@@ -798,11 +807,11 @@ private fun App(
 ) {
     val exportState by viewModel.exportState.collectAsStateWithLifecycle()
     val title = when (viewModel.currentScreen) {
-        Screen.Home -> "BBAI Switch Reader"
-        Screen.Browser -> viewModel.sessionStack.lastOrNull()?.inspection?.displayName ?: "Browser"
-        Screen.Detail -> viewModel.selectedNode?.name ?: "Details"
-        Screen.Preview -> viewModel.previewState?.title ?: "Preview"
-        Screen.Settings -> "Settings"
+        Screen.Home -> stringResource(R.string.title_home)
+        Screen.Browser -> viewModel.sessionStack.lastOrNull()?.inspection?.displayName ?: stringResource(R.string.title_browser)
+        Screen.Detail -> viewModel.selectedNode?.name ?: stringResource(R.string.title_details)
+        Screen.Preview -> viewModel.previewState?.title ?: stringResource(R.string.title_preview)
+        Screen.Settings -> stringResource(R.string.title_settings)
     }
 
     Scaffold(
@@ -854,16 +863,16 @@ private fun TopBar(
         navigationIcon = {
             if (showBack) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                 }
             }
         },
         actions = {
             IconButton(onClick = onHome) {
-                Icon(Icons.Default.Home, contentDescription = "Home")
+                Icon(Icons.Default.Home, contentDescription = stringResource(R.string.action_home))
             }
             IconButton(onClick = onSettings) {
-                Icon(Icons.Default.Settings, contentDescription = "Settings")
+                Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.action_settings))
             }
         },
     )
@@ -884,25 +893,25 @@ private fun HomeScreen(
         item {
             Card {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("只读浏览合法拥有的 Switch 容器与特殊文件", style = MaterialTheme.typography.titleMedium)
-                    Text("当前版本优先选择最稳、最快、最适合解包的方案：纯 Kotlin + SAF + 流式导出，不内置密钥、不联网、不执行内容。")
-                    Button(onClick = onPickFile) { Text("选择输入文件") }
-                    OutlinedButton(onClick = onPickInputTree) { Text("选择输入目录") }
-                    OutlinedButton(onClick = onPickTree) { Text("选择输出目录") }
-                    OutlinedButton(onClick = viewModel::reopenLastInput, enabled = viewModel.lastInputUri != null) { Text("重新打开上次文件") }
+                    Text(stringResource(R.string.home_intro_title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.home_intro_body))
+                    Button(onClick = onPickFile) { Text(stringResource(R.string.button_pick_input_file)) }
+                    OutlinedButton(onClick = onPickInputTree) { Text(stringResource(R.string.button_pick_input_directory)) }
+                    OutlinedButton(onClick = onPickTree) { Text(stringResource(R.string.button_pick_output_directory)) }
+                    OutlinedButton(onClick = viewModel::reopenLastInput, enabled = viewModel.lastInputUri != null) { Text(stringResource(R.string.button_reopen_last_input)) }
                 }
             }
         }
         item {
-            SummaryCard("输入文件", viewModel.lastInputUri?.toString() ?: "未选择")
+            SummaryCard(stringResource(R.string.label_input_file), viewModel.lastInputUri?.toString() ?: stringResource(R.string.label_not_selected))
         }
         item {
-            SummaryCard("输出目录", viewModel.outputTreeUri?.toString() ?: "未选择")
+            SummaryCard(stringResource(R.string.label_output_directory), viewModel.outputTreeUri?.toString() ?: stringResource(R.string.label_not_selected))
         }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("支持范围")
+                    Text(stringResource(R.string.label_support_scope))
                     Text(stringResource(R.string.support_pfs_hfs_exefs))
                     Text(stringResource(R.string.support_input_directory))
                     Text(stringResource(R.string.support_metadata))
@@ -935,7 +944,7 @@ private fun BrowserScreen(viewModel: MainViewModel) {
                 value = viewModel.searchQuery,
                 onValueChange = viewModel::updateSearchQuery,
                 modifier = Modifier.weight(1f),
-                label = { Text("搜索路径") },
+                label = { Text(stringResource(R.string.label_search_path)) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {}),
@@ -975,20 +984,20 @@ private fun DetailScreen(viewModel: MainViewModel) {
         inspection?.warnings?.forEach { WarningCard(it) }
         Card {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("详情", style = MaterialTheme.typography.titleMedium)
-                (inspection?.metadata ?: listOf(MetadataField("Status", "Loading…"))).forEach { field ->
+            Text(stringResource(R.string.label_details), style = MaterialTheme.typography.titleMedium)
+                (inspection?.metadata ?: listOf(MetadataField("Status", stringResource(R.string.label_metadata_loading)))).forEach { field ->
                     Text("${field.label}: ${field.value}")
                 }
             }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (canBrowse) {
-                Button(onClick = viewModel::browseSelectedNode) { Text("浏览容器") }
+            Button(onClick = viewModel::browseSelectedNode) { Text(stringResource(R.string.button_browse_archive)) }
             }
             if (canPreview) {
-                OutlinedButton(onClick = viewModel::preparePreview) { Text("媒体预览") }
+            OutlinedButton(onClick = viewModel::preparePreview) { Text(stringResource(R.string.button_media_preview)) }
             }
-            OutlinedButton(onClick = viewModel::exportSelectedNode) { Text("导出原文件") }
+            OutlinedButton(onClick = viewModel::exportSelectedNode) { Text(stringResource(R.string.button_export_raw)) }
         }
     }
 }
@@ -1005,9 +1014,7 @@ private fun PreviewScreen(viewModel: MainViewModel) {
         SwitchFileKind.AUDIO,
         SwitchFileKind.VIDEO,
         -> MediaPreview(preview.uri)
-        else -> Column(modifier = Modifier.padding(16.dp)) {
-            Text("Preview unavailable. Export the raw file instead.")
-        }
+        else -> Column(modifier = Modifier.padding(16.dp)) { Text(stringResource(R.string.preview_unavailable)) }
     }
 }
 
@@ -1045,22 +1052,22 @@ private fun SettingsScreen(viewModel: MainViewModel) {
         item {
             Card {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("合法使用边界", style = MaterialTheme.typography.titleMedium)
-                    Text("• 不内置、提取、下载或绕过任何密钥/DRM")
-                    Text("• 不联网，不自动寻找密钥，不执行导出内容")
-                    Text("• 对加密或未实现格式仅显示状态并保留后续合法接口边界")
+                    Text(stringResource(R.string.legal_boundary_title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.legal_boundary_1))
+                    Text(stringResource(R.string.legal_boundary_2))
+                    Text(stringResource(R.string.legal_boundary_3))
                 }
             }
         }
         item {
-            Text("已持久化的 SAF URI", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.persisted_uri_title), style = MaterialTheme.typography.titleMedium)
         }
         items(viewModel.persistedUris, key = { it.toString() }) { uri ->
             Card {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(uri.toString())
                     OutlinedButton(onClick = { viewModel.releasePersistedUri(uri) }) {
-                        Text("释放权限")
+                        Text(stringResource(R.string.button_release_permission))
                     }
                 }
             }
@@ -1068,11 +1075,11 @@ private fun SettingsScreen(viewModel: MainViewModel) {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("后续建议补充")
+                    Text(stringResource(R.string.future_work_title))
                     Text(stringResource(R.string.future_romfs))
-                    Text("• 合法密钥接口注入与仅在用户提供密钥时的受控解密")
-                    Text("• Switch 专有纹理/音频容器解码")
-                    Text("• 更持久的后台任务（如 WorkManager）")
+                    Text(stringResource(R.string.future_key_provider))
+                    Text(stringResource(R.string.future_codecs))
+                    Text(stringResource(R.string.future_workers))
                 }
             }
         }
@@ -1107,7 +1114,7 @@ private fun BrowserNodeRow(row: VisibleNodeRow, onClick: () -> Unit) {
 private fun SortMenu(selected: SortMode, onSelected: (SortMode) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        OutlinedButton(onClick = { expanded = true }) { Text("排序: ${selected.name}") }
+        OutlinedButton(onClick = { expanded = true }) { Text(stringResource(R.string.label_sort, selected.name)) }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             SortMode.entries.forEach { mode ->
                 DropdownMenuItem(
@@ -1152,7 +1159,7 @@ private fun StatusBanner(message: String?, onDismiss: () -> Unit) {
             Spacer(modifier = Modifier.width(8.dp))
             Text(message, modifier = Modifier.weight(1f))
             IconButton(onClick = onDismiss) {
-                Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_dismiss))
             }
         }
     }
@@ -1163,16 +1170,16 @@ private fun ExportStatusCard(state: ExportState, onCancel: () -> Unit) {
     if (!state.running && state.outputUri == null && state.error == null && state.logLines.isEmpty()) return
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(state.title ?: "Export")
+            Text(state.title ?: stringResource(R.string.label_export))
             if (state.running) {
                 LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
-                Text("${(state.progress * 100).roundToInt()}% · ${state.copiedBytes}/${state.totalBytes} bytes")
-                OutlinedButton(onClick = onCancel) { Text("取消导出") }
+                Text(stringResource(R.string.label_progress_bytes, (state.progress * 100).roundToInt(), state.copiedBytes, state.totalBytes))
+                OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.button_cancel_export)) }
             }
-            state.outputUri?.let { Text("输出: $it") }
-            state.error?.let { Text("错误: $it", color = MaterialTheme.colorScheme.error) }
+            state.outputUri?.let { Text(stringResource(R.string.label_output_uri, it.toString())) }
+            state.error?.let { Text(stringResource(R.string.label_error, it), color = MaterialTheme.colorScheme.error) }
             if (state.cancelled) {
-                Text("任务已取消", color = MaterialTheme.colorScheme.error)
+                Text(stringResource(R.string.label_task_cancelled), color = MaterialTheme.colorScheme.error)
             }
             state.logLines.takeLast(6).forEach {
                 Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
