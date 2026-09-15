@@ -211,8 +211,8 @@ class SwitchInspector(
         val rootOffset = findRomFsRootDirectoryOffset(directoryTable)
         val rootEntry = parseRomFsDirectory(directoryTable, rootOffset) ?: return invalid(displayName, reader.size, SwitchFileKind.ROMFS)
         val rootChildren = buildList {
-            addAll(readRomFsFiles(reader, fileTable, dataOffset, rootEntry.firstFileOffset, ""))
-            addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, rootEntry.childOffset, ""))
+            addAll(readRomFsFiles(reader, fileTable, dataOffset, rootOffset, rootEntry.firstFileOffset, ""))
+            addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, rootOffset, rootEntry.childOffset, ""))
         }
 
         return InspectionResult(
@@ -543,18 +543,19 @@ class SwitchInspector(
         directoryTable: ByteArray,
         fileTable: ByteArray,
         dataOffset: Long,
+        tableBaseOffset: Int,
         firstOffset: Int,
         parentPath: String,
         visited: MutableSet<Int> = mutableSetOf(),
     ): List<VirtualNode> {
         val nodes = mutableListOf<VirtualNode>()
-        var offset = firstOffset
+        var offset = resolveRomFsOffset(tableBaseOffset, firstOffset)
         while (offset != RomFsEntryEmpty && visited.add(offset)) {
             val entry = parseRomFsDirectory(directoryTable, offset) ?: break
             val path = sanitizeRelativePath(listOf(parentPath, entry.name).filter { it.isNotBlank() }.joinToString("/"))
             val children = buildList {
-                addAll(readRomFsFiles(reader, fileTable, dataOffset, entry.firstFileOffset, path))
-                addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, entry.childOffset, path))
+                addAll(readRomFsFiles(reader, fileTable, dataOffset, tableBaseOffset, entry.firstFileOffset, path))
+                addAll(readRomFsDirectories(reader, directoryTable, fileTable, dataOffset, tableBaseOffset, entry.childOffset, path))
             }.sortedBy { it.name.lowercase() }
             nodes += VirtualNode(
                 name = entry.name.ifBlank { "root" },
@@ -565,7 +566,7 @@ class SwitchInspector(
                 detection = DetectionResult(SwitchFileKind.ROMFS),
                 children = children,
             )
-            offset = entry.siblingOffset
+            offset = resolveRomFsOffset(tableBaseOffset, entry.siblingOffset)
         }
         return nodes
     }
@@ -574,12 +575,13 @@ class SwitchInspector(
         reader: RandomAccessReader,
         fileTable: ByteArray,
         dataOffset: Long,
+        tableBaseOffset: Int,
         firstOffset: Int,
         parentPath: String,
         visited: MutableSet<Int> = mutableSetOf(),
     ): List<VirtualNode> {
         val nodes = mutableListOf<VirtualNode>()
-        var offset = firstOffset
+        var offset = resolveRomFsOffset(tableBaseOffset, firstOffset)
         while (offset != RomFsEntryEmpty && visited.add(offset)) {
             val entry = parseRomFsFile(fileTable, offset) ?: break
             if (entry.dataOffset >= 0 && entry.size >= 0 && dataOffset + entry.dataOffset <= reader.size && entry.size <= reader.size - dataOffset - entry.dataOffset) {
@@ -593,7 +595,7 @@ class SwitchInspector(
                     detection = detect(path, SliceReadSource(reader, dataOffset + entry.dataOffset, entry.size)),
                 )
             }
-            offset = entry.siblingOffset
+            offset = resolveRomFsOffset(tableBaseOffset, entry.siblingOffset)
         }
         return nodes
     }
@@ -640,6 +642,11 @@ class SwitchInspector(
             offset = nextOffset
         }
         return 0
+    }
+
+    private fun resolveRomFsOffset(tableBaseOffset: Int, entryOffset: Int): Int {
+        if (entryOffset == RomFsEntryEmpty) return RomFsEntryEmpty
+        return tableBaseOffset + entryOffset
     }
 
     private fun align4(value: Int): Int = (value + 3) and 3.inv()

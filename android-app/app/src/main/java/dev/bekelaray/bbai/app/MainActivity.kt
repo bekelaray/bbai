@@ -195,16 +195,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onInputDirectoryPicked(uri: Uri) {
-        val treeUri = normalizeTreeUri(uri)
-        rememberInputIfPersisted(treeUri)
-        openInput(treeUri)
+        rememberInputIfPersisted(uri)
+        openInput(uri)
     }
 
     fun onOutputPicked(uri: Uri) {
-        val treeUri = normalizeTreeUri(uri)
-        outputTreeUri = treeUri
-        if (persistOutputUri(treeUri)) {
-            prefs.edit().putString(PREF_LAST_OUTPUT, treeUri.toString()).apply()
+        outputTreeUri = uri
+        if (persistOutputUri(uri)) {
+            prefs.edit().putString(PREF_LAST_OUTPUT, uri.toString()).apply()
             message = app.getString(R.string.message_output_saved)
         } else {
             message = app.getString(R.string.message_output_not_persisted)
@@ -396,11 +394,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message = app.getString(R.string.message_release_permission_failed)
             return
         }
-        if (uri == lastInputUri && permission?.isReadPermission == true) {
+        if (sameDocumentTarget(uri, lastInputUri) && permission?.isReadPermission == true) {
             lastInputUri = null
             prefs.edit().remove(PREF_LAST_INPUT).apply()
         }
-        if (uri == outputTreeUri && permission?.isWritePermission == true) {
+        if (sameDocumentTarget(uri, outputTreeUri) && permission?.isWritePermission == true) {
             outputTreeUri = null
             prefs.edit().remove(PREF_LAST_OUTPUT).apply()
         }
@@ -707,6 +705,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!DocumentsContract.isTreeUri(uri)) return uri
         val documentId = DocumentsContract.getTreeDocumentId(uri)
         return DocumentsContract.buildDocumentUriUsingTree(uri, documentId)
+    }
+
+    private fun sameDocumentTarget(first: Uri?, second: Uri?): Boolean {
+        if (first == null || second == null) return false
+        return normalizeTreeUri(first) == normalizeTreeUri(second)
     }
 
     private fun loadPersistedUris(): List<Uri> =
