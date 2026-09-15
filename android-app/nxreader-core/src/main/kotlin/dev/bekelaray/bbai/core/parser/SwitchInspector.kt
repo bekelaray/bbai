@@ -452,6 +452,7 @@ class SwitchInspector(
             .ifBlank { "unnamed" }
 
     private fun normalizeExeFsName(name: String): String = when (name) {
+        "rtld" -> "rtld.nso"
         "main" -> "main.nso"
         "subsdk0", "subsdk1", "subsdk2", "subsdk3", "subsdk4", "subsdk5", "subsdk6", "subsdk7", "sdk" -> "$name.nso"
         "main.npdm" -> name

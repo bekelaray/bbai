@@ -622,13 +622,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         val filename = parts.last()
-        current.findFile(filename)?.let { existing ->
-            when {
-                existing.isDirectory -> error("Cannot export because $filename already exists as a directory.")
-                !existing.delete() -> error("Failed to replace existing file $filename.")
-            }
-        }
-        return current.createFile(mimeType ?: "application/octet-stream", filename)
+        val availableName = nextAvailableChildName(current, filename)
+        return current.createFile(mimeType ?: "application/octet-stream", availableName)
             ?: error("Failed to create output file.")
     }
 
@@ -688,6 +683,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 private fun buildPermissionFlags(read: Boolean, write: Boolean): Int =
     (if (read) android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
         (if (write) android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+
+private fun nextAvailableChildName(parent: DocumentFile, requestedName: String): String {
+    val dotIndex = requestedName.lastIndexOf('.')
+    val baseName = if (dotIndex > 0) requestedName.substring(0, dotIndex) else requestedName
+    val extension = if (dotIndex > 0) requestedName.substring(dotIndex) else ""
+    if (parent.findFile(requestedName) == null) return requestedName
+    generateSequence(1) { it + 1 }.forEach { index ->
+        val candidate = "$baseName ($index)$extension"
+        val existing = parent.findFile(candidate)
+        if (existing == null) {
+            return candidate
+        }
+        if (existing.isDirectory) {
+            throw IllegalStateException("Cannot export because $candidate already exists as a directory.")
+        }
+    }
+    error("Unable to allocate an export filename.")
+}
 
 private data class BrowserSession(
     val label: String,
